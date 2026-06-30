@@ -919,8 +919,8 @@ def show_cast():
         console.print("[cyan][T][/] Toggle ALL")
         console.print("[cyan][A][/] Add/Edit keys (Setup)")
         console.print("[cyan][P][/] Go to Prep")
-        console.print("[green][S][/] Start broadcasting[/]")
-        console.print("[red][Q][/] Back to main menu[/]")
+        console.print("[green][S][/] Start broadcasting")
+        console.print("[red][Q][/] Back to main menu")
 
         if RICH:
             choice = Prompt.ask("\n[cyan]Enter number to toggle, or command[/]", default="").strip().lower()
