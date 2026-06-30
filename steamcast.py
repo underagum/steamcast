@@ -246,20 +246,31 @@ def run_ffmpeg(args: list[str], log_file: Optional[Path] = None) -> tuple[bool, 
     success = proc.returncode == 0
 
     # Clean up 0-byte output from failed runs
+    # Find output path: scan for last positional arg that looks like a file path
     output_path = None
-    for i, arg in enumerate(args):
-        if arg == "-movflags":
-            output_path = Path(args[i + 2])  # skip +faststart, then the path
-            break
+    # Find output after -movflags +faststart
+    try:
+        mov_idx = args.index("-movflags")
+        if mov_idx + 2 < len(args):
+            output_path = Path(args[mov_idx + 2])
+    except ValueError:
+        pass
     if not output_path:
-        output_path = Path(args[-1])
+        # Fallback: last arg if it looks like a path (not a flag)
+        last = args[-1]
+        if not last.startswith("-") and "/" in last or "\\" in last or "." in last:
+            output_path = Path(last)
 
-    if success and output_path.exists():
-        if output_path.stat().st_size == 0:
-            output_path.unlink()
-            success = False
-    elif not success and output_path.exists():
-        output_path.unlink(missing_ok=True)
+    if output_path:
+        try:
+            if success and output_path.exists():
+                if output_path.stat().st_size == 0:
+                    output_path.unlink()
+                    success = False
+            elif not success and output_path.exists():
+                output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     return success, output
 
