@@ -1,6 +1,6 @@
 @echo off
 REM SteamCast Windows build script
-REM Run this from the steamcast/ directory on a Windows machine with Python 3.11+
+REM Run this from the build/ directory on a Windows machine with Python 3.11+
 
 echo === SteamCast Build ===
 echo.
@@ -30,12 +30,13 @@ if errorlevel 1 (
 )
 
 echo [3/3] Copying to build/...
-move /Y dist\steamcast.exe build\steamcast.exe
+move /Y dist\steamcast.exe steamcast.exe
 if errorlevel 1 (
     echo [ERROR] Could not move binary
     pause
     exit /b 1
 )
+rmdir /S /Q dist
 
 echo.
 echo === Build complete ===
