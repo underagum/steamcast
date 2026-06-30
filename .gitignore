@@ -1,0 +1,17 @@
+# SteamCast — local user config and runtime files
+config.json
+logs/
+ffmpeg/
+input/
+output/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
