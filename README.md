@@ -12,7 +12,7 @@ Two phases:
 
 | Phase | What |
 |-------|------|
-| **PREP** | Convert your video files to Steam's broadcast spec (H.264, AAC, 1080p30, 7 Mbps CBR) and concatenate them by game. One `.mp4` per game, ready to upload. |
+| **PREP** | Convert your video files to Steam's broadcast spec (H.264, AAC, 1080p30, 7 Mbps CBR) and concatenate them by game. One `.mp4` per game, ready to stream. |
 | **CAST** | Set up RTMP keys, toggle which games to broadcast, and start/stop streams — all from your Windows machine. |
 
 ---
@@ -51,17 +51,13 @@ input\
 4. Follow the prompts. The tool detects your GPU and picks best settings.
 5. Output goes to `output\` — one `.mp4` per game.
 
-### 3. Upload to your server
-
-Use FileZilla, SCP, or any method to copy the `.mp4` files from `output\` to your broadcast server.
-
-### 4. Set up RTMP keys
+### 3. Set up RTMP keys
 
 From the main menu, choose **Setup** (option `3`) or go directly to **CAST** — it'll ask for keys the first time.
 
 Keys are stored locally in `config.json`. **No data leaves your machine.**
 
-### 5. Cast
+### 4. Cast
 
 Choose **CAST** (option `2`) from the main menu.
 
