@@ -98,8 +98,8 @@ def repair_config(cfg: dict) -> dict:
         if not isinstance(entry, dict):
             to_delete.append(gname)
             continue
-        # Delete entries where the game name IS a Steam RTMP key
-        if gname.startswith("steam_") and len(gname) > 30:
+        # Delete entries where the game name looks like a Steam RTMP key
+        if gname.startswith("steam_") and len(gname) > 20:
             to_delete.append(gname)
 
     for gname in to_delete:
@@ -929,7 +929,7 @@ def show_cast():
             else:
                 is_active = False
                 has_key = False
-            has_video = gname.lower() in available_videos
+            has_video = gname.lower() in available_videos or sanitize_filename(gname).lower() in available_videos
 
             toggle = "[green]ON[/]" if is_active else "[dim]OFF[/]"
             if has_video:
