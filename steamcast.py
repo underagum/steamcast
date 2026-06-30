@@ -336,12 +336,15 @@ def save_config(cfg: dict):
 
 def get_rtmp_key(game_name: str) -> str:
     cfg = load_config()
-    return cfg["games"].get(game_name, {}).get("rtmp_key", "")
+    entry = cfg["games"].get(game_name, {})
+    if not isinstance(entry, dict):
+        return ""
+    return entry.get("rtmp_key", "")
 
 
 def set_rtmp_key(game_name: str, key: str):
     cfg = load_config()
-    if game_name not in cfg["games"]:
+    if game_name not in cfg["games"] or not isinstance(cfg["games"].get(game_name), dict):
         cfg["games"][game_name] = {"rtmp_key": key, "active": False}
     else:
         cfg["games"][game_name]["rtmp_key"] = key
@@ -350,12 +353,15 @@ def set_rtmp_key(game_name: str, key: str):
 
 def get_game_active(game_name: str) -> bool:
     cfg = load_config()
-    return cfg["games"].get(game_name, {}).get("active", False)
+    entry = cfg["games"].get(game_name, {})
+    if not isinstance(entry, dict):
+        return False
+    return entry.get("active", False)
 
 
 def set_game_active(game_name: str, active: bool):
     cfg = load_config()
-    if game_name not in cfg["games"]:
+    if game_name not in cfg["games"] or not isinstance(cfg["games"].get(game_name), dict):
         cfg["games"][game_name] = {"rtmp_key": "", "active": active}
     else:
         cfg["games"][game_name]["active"] = active
