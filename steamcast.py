@@ -41,7 +41,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "1.1.2"
+VERSION = "1.1.3"
 if getattr(sys, 'frozen', False):
     ROOT_DIR = Path(sys.executable).resolve().parent
 else:

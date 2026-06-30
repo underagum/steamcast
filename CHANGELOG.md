@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.1.3 — 2026-07-01
+
+### Added
+
+- **Prerequisites check.** SteamCast now validates Python ≥3.9, Rich, and psutil *before* rendering anything. Prints clear `[ERROR]` messages and `pip install` instructions on failure — no more silent fallback to plain-text when libraries are missing.
+
+### Changed
+
+- **Version check is now non-blocking.** GitHub HTTP request runs in a daemon thread instead of blocking the main menu for up to 5 seconds on slow/no connections. Menu appears instantly.
+- **Rich auto-detection bypassed on Windows.** Python 3.14+ changes stdout behaviour in ways that trip Rich's terminal colour detection. Windows 10+ consoles all support ANSI truecolour — SteamCast now skips detection and enables it directly.
+
+## v1.1.2 — 2026-07-01
+
+### Fixed
+
+- **Game name display.** Rich's markup parser silently ate lowercase/mixed-case bracket-wrapped names like `[dreadout 3]` and `[test]`. Now uses `rich_escape()` on all game names.
+- **NVENC false negative.** `_validate_encoder` was passing `-preset p7 -rc cbr -b:v 100k` to the 1-frame test encode — an extreme combination that ffmpeg's NVENC wrapper can reject on perfectly fine driver installations. Stripped down to `-c:v h264_nvenc` only.
+
 ## v1.1.1 — 2026-07-01
 
 ### Fixed
