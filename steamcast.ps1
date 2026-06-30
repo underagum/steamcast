@@ -17,6 +17,7 @@ $Script:InputDir   = Join-Path $Script:RootDir "input"
 $Script:OutputDir  = Join-Path $Script:RootDir "output"
 $Script:FFmpegDir  = Join-Path $Script:RootDir "ffmpeg"
 $Script:FFmpegExe  = Join-Path $Script:FFmpegDir "ffmpeg.exe"
+$Script:FFmpegPath = $Script:FFmpegExe
 $Script:ConfigPath = Join-Path $Script:RootDir "config.json"
 $Script:LogDir     = Join-Path $Script:RootDir "logs"
 
@@ -306,6 +307,7 @@ function Invoke-FFmpegDownload {
             Get-ChildItem -Path $Script:FFmpegDir -Directory | Remove-Item -Recurse -Force
             Remove-Item $Script:FFmpegZipPath -Force
             Show-Ok "FFmpeg ready at $($Script:FFmpegExe)"
+            $Script:FFmpegPath = $Script:FFmpegExe
             return $true
         } else {
             throw "Could not locate ffmpeg.exe in extracted archive."
