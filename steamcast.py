@@ -154,40 +154,81 @@ _net_baseline_time: Optional[float] = None
 _proc_cache: dict[int, "psutil.Process"] = {}  # pid → Process object, survives refreshes
 
 
-def get_system_stats(pids: Optional[list[int]] = None) -> Optional[dict]:
-    """Return per-process CPU (sum of given PIDs), system RAM%, and network TX rate.
-    Pass ``pids`` to track ffmpeg child processes; omit for system-wide CPU fallback.
-    Returns None if psutil is not installed."""
+def _read_log_bitrate(log_path: Path, offset_key: str, offsets: dict) -> str:
+    """Extract latest ``bitrate=`` value from ffmpeg stderr log. Returns '—' on miss."""
+    offset = offsets.get(offset_key, 0)
+    try:
+        with open(log_path, "r", errors="replace") as f:
+            f.seek(offset)
+            new_data = f.read()
+            offsets[offset_key] = f.tell()
+    except (OSError, ValueError):
+        return "—"
+
+    if not new_data:
+        return "—"
+
+    # Scan backwards to find the last bitrate= line in this chunk
+    for line in reversed(new_data.splitlines()):
+        m = re.search(r"bitrate=\s*([\d.]+)kbits/s", line)
+        if m:
+            kbps = float(m.group(1))
+            if kbps >= 1000:
+                return f"{kbps / 1000:.1f}M"
+            return f"{kbps:.0f}K"
+    return "—"
+
+
+def get_per_stream_stats(active_streams: dict) -> dict:
+    """Return per-stream {gname: {cpu, bitrate}}. Empty if psutil missing."""
+    if not _PSUTIL:
+        return {}
+
+    global _proc_cache
+    result = {}
+
+    for gname, stream in active_streams.items():
+        proc = stream["process"]
+        if proc.poll() is not None:
+            # Dead process — no live stats
+            continue
+
+        # ── Per-process CPU ──
+        pid = proc.pid
+        try:
+            p = _proc_cache.get(pid)
+            if p is None:
+                p = psutil.Process(pid)
+                p.cpu_percent()  # prime
+                _proc_cache[pid] = p
+            cpu = p.cpu_percent()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            _proc_cache.pop(pid, None)
+            cpu = 0.0
+
+        # ── Bitrate from ffmpeg stderr log ──
+        offsets = stream.setdefault("_read_offsets", {})
+        bitrate = _read_log_bitrate(stream["log_file"], f"bitrate_{pid}", offsets)
+
+        result[gname] = {"cpu": cpu, "bitrate": bitrate}
+
+    # Prune dead PIDs from cache
+    live_pids = {s["process"].pid for s in active_streams.values() if s["process"].poll() is None}
+    for pid in list(_proc_cache):
+        if pid not in live_pids:
+            _proc_cache.pop(pid, None)
+
+    return result
+
+
+def get_system_ram_tx() -> Optional[dict]:
+    """Return system RAM% and total network TX rate. Returns None if psutil missing."""
     if not _PSUTIL:
         return None
 
-    global _net_baseline, _net_baseline_time, _proc_cache
+    global _net_baseline, _net_baseline_time
 
-    # ── Per-process CPU (sum of tracked PIDs) ──
-    cpu_pct = 0.0
-    if pids:
-        stale = set(_proc_cache) - set(pids)
-        for pid in stale:
-            _proc_cache.pop(pid, None)
-
-        for pid in pids:
-            try:
-                proc = _proc_cache.get(pid)
-                if proc is None:
-                    proc = psutil.Process(pid)
-                    proc.cpu_percent()  # prime
-                    _proc_cache[pid] = proc
-                cpu_pct += proc.cpu_percent()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                _proc_cache.pop(pid, None)
-    else:
-        # Fallback: system-wide (single call, no PID tracking needed)
-        cpu_pct = psutil.cpu_percent(interval=None)
-
-    # ── System RAM ──
     mem = psutil.virtual_memory().percent
-
-    # ── Network TX rate (delta since last sample) ──
     net = psutil.net_io_counters()
     now = time.time()
     rate_str = "—"
@@ -207,7 +248,7 @@ def get_system_stats(pids: Optional[list[int]] = None) -> Optional[dict]:
     _net_baseline = net.bytes_sent
     _net_baseline_time = now
 
-    return {"cpu": cpu_pct, "mem": mem, "net_tx": rate_str}
+    return {"mem": mem, "net_tx": rate_str}
 
 
 # ─── FFmpeg ───────────────────────────────────────────────────────────
@@ -1202,24 +1243,36 @@ def run_cast_stream(games: list[dict]):
         Thread(target=key_listener, daemon=True).start()
 
         while running:
+            stream_stats = get_per_stream_stats(active_streams) if _PSUTIL else {}
+            show_detail = _PSUTIL
             for gname in sorted(active_streams):
                 stream = active_streams[gname]
                 proc = stream["process"]
                 elapsed = (datetime.now() - stream["start_time"]).total_seconds()
                 status = "● RUNNING" if proc.poll() is None else "✗ STOPPED"
                 color = "\033[32m" if proc.poll() is None else "\033[31m"
-                print(f"\033[K  {color}{gname}  [{status}]  ({format_duration(elapsed)})  PID {stream['pid']}\033[0m")
-            # System stats line
-            pids = [s["process"].pid for s in active_streams.values() if s["process"].poll() is None]
-            stats = get_system_stats(pids) if pids else get_system_stats()
-            if stats:
-                cpu_color = "\033[31m" if stats["cpu"] > 80 else "\033[33m" if stats["cpu"] > 50 else "\033[32m"
-                mem_color = "\033[31m" if stats["mem"] > 85 else "\033[33m" if stats["mem"] > 60 else "\033[32m"
-                print(f"\033[K  FFmpeg: {cpu_color}{stats['cpu']:.0f}%\033[0m  RAM: {mem_color}{stats['mem']:.0f}%\033[0m  TX: {stats['net_tx']}")
-                lines = len(active_streams) + 1  # streams + stats line
+
+                # Per-stream CPU + bitrate (only if psutil is available)
+                if show_detail and proc.poll() is None:
+                    ss = stream_stats.get(gname, {})
+                    cpu_val = ss.get("cpu", 0)
+                    bitrate_val = ss.get("bitrate", "—")
+                    cpu_color = "\033[33m" if cpu_val > 50 else "\033[32m"
+                    detail = f"  CPU: {cpu_color}{cpu_val:.0f}%\033[0m  {bitrate_val}"
+                else:
+                    detail = ""
+
+                print(f"\033[K  {color}{gname}  [{status}]  ({format_duration(elapsed)})  PID {stream['pid']}{detail}\033[0m")
+
+            # System RAM + total TX
+            sys_stats = get_system_ram_tx()
+            if sys_stats:
+                mem_color = "\033[31m" if sys_stats["mem"] > 85 else "\033[33m" if sys_stats["mem"] > 60 else "\033[32m"
+                print(f"\033[K  RAM: {mem_color}{sys_stats['mem']:.0f}%\033[0m  TX: {sys_stats['net_tx']}")
+                lines = len(active_streams) + 1
             else:
                 lines = len(active_streams)
-            print(f"\033[{lines}A", end="")  # Move cursor back up
+            print(f"\033[{lines}A", end="")
             time.sleep(2)
         print("\n")
     else:
@@ -1228,6 +1281,11 @@ def run_cast_stream(games: list[dict]):
 
         def generate_table():
             table = Table.grid(padding=(0, 2))
+
+            # Per-stream stats (CPU + bitrate from ffmpeg log)
+            stream_stats = get_per_stream_stats(active_streams) if _PSUTIL else {}
+            show_detail = _PSUTIL
+
             for gname in sorted(active_streams):
                 stream = active_streams[gname]
                 proc = stream["process"]
@@ -1236,28 +1294,38 @@ def run_cast_stream(games: list[dict]):
                     row_style = "green"
                     icon = "[green]●[/]"
                     status = "RUNNING"
+
+                    # Per-stream CPU + bitrate (only if psutil is available)
+                    if show_detail:
+                        ss = stream_stats.get(gname, {})
+                        cpu_val = ss.get("cpu", 0)
+                        bitrate_val = ss.get("bitrate", "—")
+                        cpu_str = f"[dim]{cpu_val:.0f}%[/]" if cpu_val < 50 else f"[yellow]{cpu_val:.0f}%[/]"
+                        bitrate_str = f"[dim]{bitrate_val}[/]"
+                        detail = f"  CPU {cpu_str}  {bitrate_str}"
+                    else:
+                        detail = ""
                 else:
                     row_style = "red"
                     icon = "[red]✗[/]"
                     status = "STOPPED"
+                    detail = ""
+
                 table.add_row(
                     f"[bold {row_style}]{rich_escape(gname)}[/]",
                     f"[{row_style}]{icon} {status}[/]",
                     f"[dim]({format_duration(elapsed)})[/]",
-                    f"[dim]PID {stream['pid']}[/]",
+                    f"[dim]PID {stream['pid']}[/]" + detail,
                 )
 
-            # System stats (if psutil available)
-            pids = [s["process"].pid for s in active_streams.values() if s["process"].poll() is None]
-            stats = get_system_stats(pids) if pids else get_system_stats()
-            if stats:
+            # System RAM + total TX (system-wide)
+            sys_stats = get_system_ram_tx()
+            if sys_stats:
                 table.add_row("")  # spacer
-                cpu_color = "red" if stats["cpu"] > 80 else "yellow" if stats["cpu"] > 50 else "green"
-                mem_color = "red" if stats["mem"] > 85 else "yellow" if stats["mem"] > 60 else "green"
+                mem_color = "red" if sys_stats["mem"] > 85 else "yellow" if sys_stats["mem"] > 60 else "green"
                 table.add_row(
-                    f"[dim]FFmpeg:[/] [{cpu_color}]{stats['cpu']:.0f}%[/]  "
-                    f"[dim]RAM:[/] [{mem_color}]{stats['mem']:.0f}%[/]  "
-                    f"[dim]TX:[/] [white]{stats['net_tx']}[/]",
+                    f"[dim]RAM:[/] [{mem_color}]{sys_stats['mem']:.0f}%[/]  "
+                    f"[dim]TX:[/] [white]{sys_stats['net_tx']}[/]",
                 )
 
             return table
