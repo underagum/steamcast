@@ -818,7 +818,7 @@ function Invoke-Cast {
         Write-Host ""
         Write-Host "Enter number to toggle, or command: " -NoNewline -ForegroundColor $Script:CCyan
         
-        $input = ([Console]::ReadLine() ?? "").Trim().ToLower()
+        $input = "$([Console]::ReadLine())".Trim().ToLower()
         
         if ($input -eq "q") { $exitCast = $true; break }
         elseif ($input -eq "t") {
@@ -1081,7 +1081,7 @@ function Show-MainMenu {
         Write-Host ""
         Write-Host "Select option: " -NoNewline -ForegroundColor $Script:CCyan
         
-        $choice = ([Console]::ReadLine() ?? "").Trim().ToLower()
+        $choice = "$([Console]::ReadLine())".Trim().ToLower()
         
         switch ($choice) {
             "1" { Invoke-Prep }
@@ -1101,7 +1101,7 @@ function Show-MainMenu {
 #region ─── ENTRY POINT ────────────────────────────────────────────────
 
 # Support command-line arguments
-$cmd = ($args[0] ?? "").ToLower()
+$cmd = "$($args[0])".ToLower()
 
 try {
     switch ($cmd) {
