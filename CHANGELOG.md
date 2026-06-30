@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.1 — 2026-07-01
+
+### Fixed
+
+- **Frozen `.exe` root-path resolution.** `__file__` resolves to a temp directory inside PyInstaller's runtime extraction, so `ffmpeg/`, `input/`, `output/`, and `config.json` were all looked up from the wrong location. Now uses `sys.executable` for frozen builds — root directory is correctly the folder where `steamcast.exe` lives.
+- **Build audit (4 issues).** `build.bat` move destination no longer creates a nested `build\build\` path. Comment corrected to `build/` directory. `dist/` cleaned up after move. `.gitignore` covers `build/dist/`.
+
 ## v1.1.0 — 2026-07-01
 
 ### New Features

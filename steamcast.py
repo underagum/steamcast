@@ -40,8 +40,11 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "1.1.0"
-ROOT_DIR = Path(__file__).resolve().parent
+VERSION = "1.1.1"
+if getattr(sys, 'frozen', False):
+    ROOT_DIR = Path(sys.executable).resolve().parent
+else:
+    ROOT_DIR = Path(__file__).resolve().parent
 INPUT_DIR = ROOT_DIR / "input"
 OUTPUT_DIR = ROOT_DIR / "output"
 FFMPEG_DIR = ROOT_DIR / "ffmpeg"
