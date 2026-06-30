@@ -682,7 +682,7 @@ def show_cast_setup():
                 safe_g = sanitize_filename(gname)
                 vid = available_videos.get(safe_g) or available_videos.get(gname)
                 video_status = "✓" if vid else "⚠ no video"
-                console.print(f"  [white][{i}][/] {gname}  [{dim}{masked}[/]]  {video_status}")
+                console.print(f"  [white][{i}][/] {gname}  [dim]{masked}[/]  {video_status}")
         else:
             console.print("[dim]No games configured yet.[/]")
 
@@ -696,7 +696,7 @@ def show_cast_setup():
         # Menu
         console.print(f"\n[yellow]{'─' * 40}[/]")
         if existing:
-            console.print("[white]\\[1-{n}\\][/] Edit game  |  [cyan][A][/] Add new  |  [red][D][/] Delete  |  [dim][Q][/] Done".format(n=len(existing)))
+            console.print("[white]\\[1-{n}][/] Edit game  |  [cyan][A][/] Add new  |  [red][D][/] Delete  |  [dim][Q][/] Done".format(n=len(existing)))
         else:
             console.print("[cyan][A][/] Add new game  |  [dim][Q][/] Done")
         console.print()
