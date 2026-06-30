@@ -372,9 +372,20 @@ def detect_encoder(console) -> EncoderSettings:
 
     # Priority 1: NVIDIA NVENC
     if "h264_nvenc" in encoders:
-        console.print("[cyan]NVIDIA NVENC detected — using hardware encoding.[/]")
-        _cached_encoder = EncoderSettings(codec="h264_nvenc", preset="p7", cbr_flags=["-rc", "cbr"])
-        return _cached_encoder
+        enc = EncoderSettings(codec="h264_nvenc", preset="p7", cbr_flags=["-rc", "cbr"])
+        ok, driver_msg = _validate_encoder(ffmpeg, enc)
+        if ok:
+            console.print("[cyan]NVIDIA NVENC detected — using hardware encoding.[/]")
+            _cached_encoder = enc
+            return _cached_encoder
+        else:
+            console.print(f"[yellow]NVIDIA NVENC found but driver is too old.[/]")
+            if driver_msg:
+                console.print(f"[dim]{driver_msg}[/]")
+            console.print("[yellow]Falling back to libx264 (software).[/]")
+            console.print("[dim]Fix: install NVIDIA driver ≥ 610.00 from https://www.nvidia.com/download/[/]")
+            _cached_encoder = EncoderSettings(codec="libx264", preset="slow")
+            return _cached_encoder
     # Priority 2: Intel QSV
     if "h264_qsv" in encoders:
         console.print("[cyan]Intel QSV detected — using hardware encoding.[/]")
@@ -389,6 +400,47 @@ def detect_encoder(console) -> EncoderSettings:
     console.print("[yellow]No hardware encoder. Using libx264 (slower).[/]")
     _cached_encoder = EncoderSettings(codec="libx264", preset="slow")
     return _cached_encoder
+
+
+def _validate_encoder(ffmpeg: str, enc: EncoderSettings) -> tuple[bool, str]:
+    """Run a minimal 1-frame encode to verify the encoder + driver actually work.
+    Returns (ok, diagnostic_message)."""
+    cmd = [
+        ffmpeg, "-y", "-hide_banner",
+        "-f", "lavfi", "-i", "color=c=black:s=32x32:d=0.1",
+        "-frames:v", "1",
+        "-c:v", enc.codec,
+        "-preset", enc.preset,
+        *enc.cbr_flags,
+        "-f", "null", "-",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        merged = proc.stdout + proc.stderr
+
+        # NVENC driver version mismatch
+        m = re.search(r"Driver does not support the required nvenc API version.*", merged)
+        if m:
+            return False, m.group(0)
+        m = re.search(r"minimum required Nvidia driver for nvenc is.*", merged)
+        if m:
+            return False, m.group(0)
+
+        # Generic "could not open encoder" — usually driver
+        if "Could not open encoder" in merged or "Error while opening encoder" in merged:
+            return False, "Encoder failed to initialize (likely driver or GPU issue)."
+
+        # Non-zero exit but no recognizable error pattern — show last error line
+        if proc.returncode != 0:
+            lines = [l for l in merged.splitlines() if "Error" in l or "error" in l]
+            last = lines[-1] if lines else f"exit code {proc.returncode}"
+            return False, last
+
+        return True, ""
+    except subprocess.TimeoutExpired:
+        return False, "Encoder validation timed out."
+    except Exception as e:
+        return False, str(e)
 
 
 def build_ffmpeg_args(
