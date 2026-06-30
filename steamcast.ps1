@@ -1103,41 +1103,61 @@ function Show-MainMenu {
 # Support command-line arguments
 $cmd = ($args[0] ?? "").ToLower()
 
-switch ($cmd) {
-    "prep"    { 
-        Check-NewerVersion
-        if (-not (Test-FFmpegAvailable)) { $null = Invoke-FFmpegDownload }
-        Initialize-JobObject
-        try {
-            Invoke-Prep
-        } finally {
-            Cleanup-JobObject
+try {
+    switch ($cmd) {
+        "prep"    { 
+            Check-NewerVersion
+            if (-not (Test-FFmpegAvailable)) { $null = Invoke-FFmpegDownload }
+            Initialize-JobObject
+            try {
+                Invoke-Prep
+            } finally {
+                Cleanup-JobObject
+            }
+        }
+        "setup"   { 
+            Check-NewerVersion
+            Initialize-JobObject
+            try {
+                Invoke-CastSetup
+            } finally {
+                Cleanup-JobObject
+            }
+        }
+        "cast"    { 
+            Check-NewerVersion
+            if (-not (Test-FFmpegAvailable)) { $null = Invoke-FFmpegDownload }
+            Initialize-JobObject
+            try {
+                Invoke-Cast
+            } finally {
+                Cleanup-JobObject
+            }
+        }
+        default   { 
+            Initialize-JobObject
+            try {
+                Show-MainMenu
+            } finally {
+                Cleanup-JobObject
+            }
         }
     }
-    "setup"   { 
-        Check-NewerVersion
-        Initialize-JobObject
-        try {
-            Invoke-CastSetup
-        } finally {
-            Cleanup-JobObject
-        }
-    }
-    "cast"    { 
-        Check-NewerVersion
-        if (-not (Test-FFmpegAvailable)) { $null = Invoke-FFmpegDownload }
-        Initialize-JobObject
-        try {
-            Invoke-Cast
-        } finally {
-            Cleanup-JobObject
-        }
-    }
-    default   { Show-MainMenu }
+} catch {
+    Write-Host ""
+    Write-Host "╔════════════════════════════════════════════╗" -ForegroundColor Red
+    Write-Host "║            UNHANDLED ERROR                 ║" -ForegroundColor Red
+    Write-Host "╚════════════════════════════════════════════╝" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Message:     $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Line:        $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Red
+    Write-Host "Position:    $($_.InvocationInfo.OffsetInLine)" -ForegroundColor Red
+    Write-Host "StackTrace:" -ForegroundColor Yellow
+    Write-Host "$($_.ScriptStackTrace)" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "[i] Report this at https://github.com/underagum/steamcast/issues" -ForegroundColor Cyan
 }
 
-# If run without a terminal (double-clicked .ps1), wait
-if ($Host.Name -eq "ConsoleHost" -and -not $args) {
-    Write-Host "`nPress any key to exit..." -ForegroundColor $Script:CCyan
-    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-}
+# Always pause before exit — even on crash
+Write-Host "`nPress any key to exit..." -ForegroundColor Cyan
+try { $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") } catch { Start-Sleep 5 }
