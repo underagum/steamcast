@@ -30,6 +30,14 @@ from typing import Optional
 
 import urllib.request
 
+# System monitoring — optional, auto-detected
+try:
+    import psutil
+
+    _PSUTIL = True
+except ImportError:
+    _PSUTIL = False
+
 # ─── Config ───────────────────────────────────────────────────────────
 
 VERSION = "1.0.0-beta"
@@ -135,6 +143,56 @@ def rich_escape(text: str) -> str:
     """Escape [ in user-provided strings to prevent Rich MarkupErrors.
     Only [ needs escaping — ] is only dangerous as part of unclosed [/]."""
     return text.replace("[", "\\[")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# System monitoring (psutil — optional)
+# ══════════════════════════════════════════════════════════════════════
+
+_net_baseline: Optional[int] = None  # bytes_sent from previous sample
+_net_baseline_time: Optional[float] = None
+_cpu_primed: bool = False
+
+
+def _prime_cpu():
+    """Call psutil.cpu_percent once to establish a baseline."""
+    global _cpu_primed
+    if _PSUTIL and not _cpu_primed:
+        psutil.cpu_percent(interval=None)
+        _cpu_primed = True
+
+
+def get_system_stats() -> Optional[dict]:
+    """Return CPU %, RAM %, and network TX rate. Returns None if psutil missing."""
+    if not _PSUTIL:
+        return None
+
+    global _net_baseline, _net_baseline_time
+
+    _prime_cpu()
+    cpu = psutil.cpu_percent(interval=None)
+    mem = psutil.virtual_memory().percent
+    net = psutil.net_io_counters()
+
+    now = time.time()
+    rate_str = "—"
+
+    if _net_baseline is not None and _net_baseline_time is not None:
+        elapsed = now - _net_baseline_time
+        if elapsed > 0.5:
+            tx_delta = net.bytes_sent - _net_baseline
+            rate = tx_delta / elapsed
+            if rate >= 1024 * 1024:
+                rate_str = f"{rate / 1024 / 1024:.1f} MB/s"
+            elif rate >= 1024:
+                rate_str = f"{rate / 1024:.0f} KB/s"
+            else:
+                rate_str = f"{rate:.0f} B/s"
+
+    _net_baseline = net.bytes_sent
+    _net_baseline_time = now
+
+    return {"cpu": cpu, "mem": mem, "net_tx": rate_str}
 
 
 # ─── FFmpeg ───────────────────────────────────────────────────────────
@@ -1136,7 +1194,16 @@ def run_cast_stream(games: list[dict]):
                 status = "● RUNNING" if proc.poll() is None else "✗ STOPPED"
                 color = "\033[32m" if proc.poll() is None else "\033[31m"
                 print(f"\033[K  {color}{gname}  [{status}]  ({format_duration(elapsed)})  PID {stream['pid']}\033[0m")
-            print(f"\033[{len(active_streams)}A", end="")  # Move cursor back up
+            # System stats line
+            stats = get_system_stats()
+            if stats:
+                cpu_color = "\033[31m" if stats["cpu"] > 80 else "\033[33m" if stats["cpu"] > 50 else "\033[32m"
+                mem_color = "\033[31m" if stats["mem"] > 85 else "\033[33m" if stats["mem"] > 60 else "\033[32m"
+                print(f"\033[K  CPU: {cpu_color}{stats['cpu']:.0f}%\033[0m  RAM: {mem_color}{stats['mem']:.0f}%\033[0m  TX: {stats['net_tx']}")
+                lines = len(active_streams) + 1  # streams + stats line
+            else:
+                lines = len(active_streams)
+            print(f"\033[{lines}A", end="")  # Move cursor back up
             time.sleep(2)
         print("\n")
     else:
@@ -1163,6 +1230,19 @@ def run_cast_stream(games: list[dict]):
                     f"[dim]({format_duration(elapsed)})[/]",
                     f"[dim]PID {stream['pid']}[/]",
                 )
+
+            # System stats (if psutil available)
+            stats = get_system_stats()
+            if stats:
+                table.add_row("")  # spacer
+                cpu_color = "red" if stats["cpu"] > 80 else "yellow" if stats["cpu"] > 50 else "green"
+                mem_color = "red" if stats["mem"] > 85 else "yellow" if stats["mem"] > 60 else "green"
+                table.add_row(
+                    f"[dim]CPU:[/] [{cpu_color}]{stats['cpu']:.0f}%[/]  "
+                    f"[dim]RAM:[/] [{mem_color}]{stats['mem']:.0f}%[/]  "
+                    f"[dim]TX:[/] [white]{stats['net_tx']}[/]",
+                )
+
             return table
 
         import threading
