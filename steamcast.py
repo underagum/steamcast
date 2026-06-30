@@ -13,6 +13,7 @@ Usage:
 
 import builtins
 import json
+import logging
 import os
 import re
 import shutil
@@ -20,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 import zipfile
 from dataclasses import dataclass, field, asdict
@@ -39,6 +41,7 @@ FFMPEG_DIR = ROOT_DIR / "ffmpeg"
 FFMPEG_EXE = FFMPEG_DIR / "ffmpeg.exe" if sys.platform == "win32" else FFMPEG_DIR / "ffmpeg"
 CONFIG_PATH = ROOT_DIR / "config.json"
 LOG_DIR = ROOT_DIR / "logs"
+CRASH_LOG = LOG_DIR / "steamcast_crash.log"
 
 
 @dataclass
@@ -1169,7 +1172,40 @@ def show_main_menu():
 
 # ─── Entry Point ─────────────────────────────────────────────────────
 
+def setup_crash_logging():
+    """Install a global exception hook that writes tracebacks to a crash log."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # File handler — appends every crash
+    fh = logging.FileHandler(str(CRASH_LOG), encoding="utf-8")
+    fh.setLevel(logging.ERROR)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    crash_logger = logging.getLogger("steamcast.crash")
+    crash_logger.addHandler(fh)
+
+    # Install global exception hook
+    def _crash_handler(exc_type, exc_value, exc_tb):
+        tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        crash_logger.error("Unhandled exception:\n%s", tb_text)
+        # Also print to stderr so it's visible in terminal
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"  STEAMCAST CRASH — see: {CRASH_LOG}", file=sys.stderr)
+        print(f"{'='*60}", file=sys.stderr)
+        traceback.print_exception(exc_type, exc_value, exc_tb, file=sys.stderr)
+        if RICH:
+            try:
+                console.input("\n[dim]Press Enter to exit...[/]")
+            except Exception:
+                pass
+
+    sys.excepthook = _crash_handler
+
+
 def main():
+    setup_crash_logging()
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
 
