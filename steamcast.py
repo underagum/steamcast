@@ -40,7 +40,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 if getattr(sys, 'frozen', False):
     ROOT_DIR = Path(sys.executable).resolve().parent
 else:
@@ -759,8 +759,19 @@ try:
         TransferSpeedColumn, TimeRemainingColumn,
     )
 
-    console = Console()
     RICH = True
+    if sys.platform == "win32":
+        # Python 3.14+ / Windows Terminal detection can degrade even
+        # when ANSI is fully available.  Bypass auto-detection and
+        # explicitly request truecolor output.
+        console = Console(force_terminal=True, color_system="truecolor")
+    else:
+        console = Console()
+        # Terminal detection can fail on newer Python versions (3.14+).
+        # If auto-detection returned no color system but the user isn't
+        # explicitly suppressing color, retry with force_terminal=True.
+        if console._color_system is None and "NO_COLOR" not in os.environ:
+            console = Console(force_terminal=True)
 except ImportError:
     # Fallback: plain print
     RICH = False
