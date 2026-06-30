@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import uuid
@@ -744,61 +745,72 @@ def tail_log(log_path: Path, lines: int = LOG_TAIL_LINES) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Prerequisites
+# ══════════════════════════════════════════════════════════════════════
+
+_REQUIRED_PYTHON = (3, 9)
+
+def check_prerequisites() -> None:
+    """Verify Python version, Rich, and psutil before the app renders anything.
+    Prints clear install instructions and exits with code 1 on failure."""
+    failed = False
+
+    # 1. Python version
+    if sys.version_info < _REQUIRED_PYTHON:
+        print(f"[ERROR] Python {'.'.join(map(str, _REQUIRED_PYTHON))}+ required.")
+        print(f"        You are running Python {sys.version.split()[0]}.")
+        print(f"        Download: https://python.org")
+        failed = True
+
+    # 2. Rich
+    try:
+        import rich  # noqa: F401 — import check only
+    except ImportError:
+        print("[ERROR] 'rich' is not installed.  It powers the SteamCast TUI.")
+        print("        Fix:  pip install rich")
+        failed = True
+
+    # 3. psutil
+    try:
+        import psutil  # noqa: F401 — import check only
+    except ImportError:
+        print("[ERROR] 'psutil' is not installed.  Required for CPU/RAM monitoring.")
+        print("        Fix:  pip install psutil")
+        failed = True
+
+    if failed:
+        sys.exit(1)
+
+
+# ══════════════════════════════════════════════════════════════════════
 # TUI (rich)
 # ══════════════════════════════════════════════════════════════════════
 
-try:
-    from rich.console import Console
-    from rich.table import Table
-    from rich.panel import Panel
-    from rich.text import Text
-    from rich.live import Live
-    from rich.prompt import Prompt, Confirm
-    from rich.align import Align
-    from rich.progress import (
-        Progress, BarColumn, TextColumn, DownloadColumn,
-        TransferSpeedColumn, TimeRemainingColumn,
-    )
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.text import Text
+from rich.live import Live
+from rich.prompt import Prompt, Confirm
+from rich.align import Align
+from rich.progress import (
+    Progress, BarColumn, TextColumn, DownloadColumn,
+    TransferSpeedColumn, TimeRemainingColumn,
+)
 
-    RICH = True
-    if sys.platform == "win32":
-        # Python 3.14+ / Windows Terminal detection can degrade even
-        # when ANSI is fully available.  Bypass auto-detection and
-        # explicitly request truecolor output.
-        console = Console(force_terminal=True, color_system="truecolor")
-    else:
-        console = Console()
-        # Terminal detection can fail on newer Python versions (3.14+).
-        # If auto-detection returned no color system but the user isn't
-        # explicitly suppressing color, retry with force_terminal=True.
-        if console._color_system is None and "NO_COLOR" not in os.environ:
-            console = Console(force_terminal=True)
-except ImportError:
-    # Fallback: plain print
-    RICH = False
-
-    class _FakeConsole:
-        def print(self, *args, **kwargs):
-            text = " ".join(str(a) for a in args)
-            # Suppress dim blocks first (before stripping individual tags)
-            text = re.sub(r"\[dim\].*?\[/\]", "", text, flags=re.DOTALL)
-            # Strip remaining markup tags (handles multi-word styles like [bold magenta])
-            text = re.sub(r"\[/?[^\]]+\]", "", text)
-            print(text)
-
-        def input(self, prompt="", **kwargs):
-            """Styled input fallback — strips markup and passes to builtin."""
-            text = str(prompt)
-            # Suppress dim blocks first (before stripping individual tags)
-            text = re.sub(r"\[dim\].*?\[/\]", "", text, flags=re.DOTALL)
-            # Strip remaining markup tags (handles multi-word styles like [bold magenta])
-            text = re.sub(r"\[/?[^\]]+\]", "", text)
-            return builtins.input(text)
-
-        def rule(self, *args, **kwargs):
-            print("-" * 60)
-
-    console = _FakeConsole()
+RICH = True
+if sys.platform == "win32":
+    # Python 3.14+ / Windows Terminal detection can degrade even
+    # when ANSI is fully available.  Bypass auto-detection and
+    # explicitly request truecolor output.
+    console = Console(force_terminal=True, color_system="truecolor")
+else:
+    console = Console()
+    # Terminal detection can fail on newer Python versions (3.14+).
+    # If auto-detection returned no color system but the user isn't
+    # explicitly suppressing color, retry with force_terminal=True.
+    if console._color_system is None and "NO_COLOR" not in os.environ:
+        console = Console(force_terminal=True)
 
 
 def banner():
@@ -1594,18 +1606,23 @@ def run_cast_stream(games: list[dict]):
 
 
 def version_check():
-    """Check GitHub for newer version (non-blocking)."""
-    try:
-        req = urllib.request.Request(VERSION_CHECK_URL)
-        with urllib.request.urlopen(req, timeout=VERSION_CHECK_TIMEOUT) as resp:
-            remote = resp.read().decode().strip()
-        if remote and remote != VERSION:
-            console.print()
-            console.print(f"[yellow]⚠ A newer version of SteamCast ({remote}) is available![/]")
-            console.print("[yellow]  Download: https://github.com/underagum/steamcast/releases[/]")
-            console.print()
-    except Exception:
-        pass
+    """Check GitHub for newer version (runs in background thread to avoid
+    blocking the main menu on slow/no connections)."""
+    def _fetch():
+        try:
+            req = urllib.request.Request(VERSION_CHECK_URL)
+            with urllib.request.urlopen(req, timeout=VERSION_CHECK_TIMEOUT) as resp:
+                remote = resp.read().decode().strip()
+            if remote and remote != VERSION:
+                console.print()
+                console.print(f"[yellow]⚠ A newer version of SteamCast ({remote}) is available![/]")
+                console.print("[yellow]  Download: https://github.com/underagum/steamcast/releases[/]")
+                console.print()
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_fetch, daemon=True)
+    t.start()
 
 
 def show_main_menu():
@@ -1679,6 +1696,7 @@ def setup_crash_logging():
 
 
 def main():
+    check_prerequisites()
     setup_crash_logging()
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
