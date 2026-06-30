@@ -19,11 +19,12 @@ Two phases:
 
 ## Requirements
 
+- **FFmpeg** — the only hard requirement. SteamCast auto-downloads a portable build (~55 MB) from gyan.dev on first run if not already installed. No manual setup needed — just let the progress bar finish.
+  > This requires an **internet connection** on first launch. After the download, SteamCast runs entirely offline.
 - **Python 3.9+** (3.11 recommended)
 - **Windows 10/11 (64-bit)** — primary target. Linux/macOS work but are secondary.
 - **`rich`** — `pip install rich` (colored TUI; graceful plain-text fallback)
 - **`psutil`** — `pip install psutil` (live system monitoring in CAST dashboard; gracefully skipped if missing)
-- **Internet connection** (first run only — downloads portable FFmpeg ~55 MB from gyan.dev)
 - **GPU (optional but recommended):**
   - **NVIDIA NVENC** — requires **driver ≥ 610.00** (FFmpeg 8.x drops `<610.00` support). SteamCast validates your driver before accepting NVENC — see [GPU Support](#gpu-support) below.
   - **Intel QSV** — any Intel GPU with Quick Sync
