@@ -5,6 +5,15 @@ ffmpeg/
 input/
 output/
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.spec
+
 # OS
 .DS_Store
 Thumbs.db
