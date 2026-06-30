@@ -1,4 +1,4 @@
-# SteamCast v1.0.0-beta
+# SteamCast v1.1.0
 
 > Prepare and broadcast multiple videos to Steam store pages — no OBS, no server setup.
 

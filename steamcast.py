@@ -40,7 +40,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "1.0.0-beta"
+VERSION = "1.1.0"
 ROOT_DIR = Path(__file__).resolve().parent
 INPUT_DIR = ROOT_DIR / "input"
 OUTPUT_DIR = ROOT_DIR / "output"
