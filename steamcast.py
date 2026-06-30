@@ -354,8 +354,10 @@ def download_ffmpeg(console) -> bool:
         return False
 
 
-def detect_encoder(console) -> EncoderSettings:
-    """Probe ffmpeg for hardware encoders. Results cached."""
+def detect_encoder(console) -> Optional[EncoderSettings]:
+    """Probe ffmpeg for hardware encoders. Results cached.
+    Returns None if the user declines fallback after NVENC driver validation
+    failure — caller should abort Prep."""
     global _cached_encoder
     if _cached_encoder:
         return _cached_encoder
@@ -382,10 +384,24 @@ def detect_encoder(console) -> EncoderSettings:
             console.print(f"[yellow]NVIDIA NVENC found but driver is too old.[/]")
             if driver_msg:
                 console.print(f"[dim]{driver_msg}[/]")
-            console.print("[yellow]Falling back to libx264 (software).[/]")
             console.print("[dim]Fix: install NVIDIA driver ≥ 610.00 from https://www.nvidia.com/download/[/]")
-            _cached_encoder = EncoderSettings(codec="libx264", preset="slow")
-            return _cached_encoder
+            console.print()
+
+            if RICH:
+                fallback = Confirm.ask(
+                    "[yellow]Fall back to CPU encoding (libx264)?[/]",
+                    default=True,
+                )
+            else:
+                fallback = input("Fall back to CPU encoding (libx264)? (Y/n): ").strip().lower() != "n"
+
+            if fallback:
+                console.print("[yellow]Using libx264 (CPU encoding — slower).[/]")
+                _cached_encoder = EncoderSettings(codec="libx264", preset="slow")
+                return _cached_encoder
+            else:
+                console.print("[dim]Aborting. Update your NVIDIA driver and try again.[/]")
+                return None
     # Priority 2: Intel QSV
     if "h264_qsv" in encoders:
         console.print("[cyan]Intel QSV detected — using hardware encoding.[/]")
@@ -829,6 +845,8 @@ def show_prep_phase():
 
     # Step 4: Process each game group
     enc = detect_encoder(console)
+    if enc is None:
+        return  # User declined fallback after NVENC validation failure
     success_count = 0
     fail_count = 0
 
