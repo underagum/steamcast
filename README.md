@@ -1,8 +1,8 @@
 # SteamCast v1.0.0-beta
 
-> Prepare and broadcast multiple game trailers to Steam store pages — no OBS, no server setup.
+> Prepare and broadcast multiple videos to Steam store pages — no OBS, no server setup.
 
-SteamCast is a **Python** tool for game developers and publishers who want to run 24/7 trailers on their Steam store pages during sales or events. It replaces OBS with lightweight FFmpeg streaming — near-zero CPU when using `-c copy`.
+SteamCast is a **Python** tool for game developers and publishers who want to run 24/7 videos on their Steam store pages during sales or events. It replaces OBS with lightweight FFmpeg streaming — near-zero CPU when using `-c copy`.
 
 ---
 
@@ -49,10 +49,10 @@ python steamcast.py prep
 
 ```
 input/
-├── dreadout 2.mp4          ← single video for this game
-├── dreadout 2_1.mkv        ← part 1 (multiple videos for same game)
-├── dreadout 2_2.mp4        ← part 2
-└── dreadhaunt.mp4          ← another game
+├── dreadout 3.mp4          ← single video for this game
+├── dreadout 3_1.mkv        ← part 1 (multiple videos for same game)
+├── dreadout 3_2.mp4        ← part 2
+└── graveless.mp4          ← another game
 ```
 
 > The tool parses game names from your filenames. `_1`, `_2` etc. mean "multiple files to concatenate". Everything before `_NUMBER` is the game name.
