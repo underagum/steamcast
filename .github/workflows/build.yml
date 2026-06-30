@@ -1,0 +1,38 @@
+name: Build Windows .exe
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - ".gitignore"
+  workflow_dispatch:  # manual trigger
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install rich psutil pyinstaller
+
+      - name: Build .exe
+        working-directory: builds
+        run: |
+          pyinstaller steamcast.spec
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: steamcast-windows
+          path: builds/dist/steamcast.exe
+          retention-days: 30
