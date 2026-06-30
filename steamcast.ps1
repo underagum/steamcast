@@ -618,7 +618,8 @@ function Invoke-Prep {
             }
         } else {
             # Multiple files — convert each, then concat
-            $tempDir = Join-Path $Script:InputDir ".temp_$([System.Guid]::NewGuid().ToString().Substring(0,8))"
+            $tempGuid = [System.Guid]::NewGuid().ToString().Substring(0,8)
+            $tempDir = Join-Path $Script:InputDir ".temp_$tempGuid"
             New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
             
             $convertedFiles = @()
@@ -696,7 +697,8 @@ function Invoke-CastSetup {
         Write-Host "Games already configured:" -ForegroundColor $Script:CYellow
         foreach ($g in $existingGames | Sort-Object) {
             $key = Get-RTMPKey $g
-            $masked = if ($key) { "$($key.Substring(0, [Math]::Min(8, $key.Length)))..." } else { "(no key)" }
+            $maskLen = [Math]::Min(8, $key.Length)
+            $masked = if ($key) { "$($key.Substring(0, $maskLen))..." } else { "(no key)" }
             $safeG = $g -replace '[<>:"/\\|?*]', '_'
             if ($safeG.Length -gt 80) { $safeG = $safeG.Substring(0, 80) }
             $hasVideo = Test-Path (Join-Path $Script:OutputDir "$safeG.mp4")
@@ -740,7 +742,8 @@ function Invoke-CastSetup {
         
         $currentKey = Get-RTMPKey $gameName
         if ($currentKey) {
-            Show-Info "Current key: $($currentKey.Substring(0, [Math]::Min(8, $currentKey.Length)))..."
+            $maskLen = [Math]::Min(8, $currentKey.Length)
+            Show-Info "Current key: $($currentKey.Substring(0, $maskLen))..."
             $change = Get-YesNo "Change it?"
             if (-not $change) { continue }
         }
