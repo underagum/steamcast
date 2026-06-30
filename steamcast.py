@@ -26,7 +26,7 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
 
 import urllib.request
 
@@ -503,18 +503,51 @@ def build_ffmpeg_args(
     return args
 
 
-def run_ffmpeg(args: list[str], log_file: Optional[Path] = None) -> tuple[bool, str]:
-    """Run ffmpeg, capture output, optionally write to log. Returns (success, output)."""
+def run_ffmpeg(
+    args: list[str],
+    log_file: Optional[Path] = None,
+    on_progress: Optional[Callable[[str], None]] = None,
+) -> tuple[bool, str]:
+    """Run ffmpeg, capture output, optionally write to log. Returns (success, output).
+
+    If ``on_progress`` is provided, it is called with the condensed status string
+    (e.g. ``"frame 180/??  fps 30  7.0M  speed 1.0x"``) each time ffmpeg emits
+    a ``frame=`` or ``progress=`` line. The caller is responsible for display
+    (typically ``print(..., end='\\r')`` or a Rich status line)."""
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         return False, "FFmpeg not found"
 
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         [ffmpeg, *args],
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
     )
-    output = proc.stdout + proc.stderr
+
+    # Read stderr line-by-line (ffmpeg writes progress to stderr)
+    all_lines: list[str] = []
+    last_progress = ""
+    try:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            all_lines.append(line)
+            stripped = line.strip()
+            if "frame=" in stripped or "progress=" in stripped:
+                last_progress = stripped
+                if on_progress:
+                    on_progress(_condense_progress(stripped))
+        proc.wait()
+    except Exception:
+        proc.kill()
+        proc.wait()
+
+    # Also collect stdout (usually empty for ffmpeg)
+    stdout = proc.stdout.read() if proc.stdout else ""
+    proc.stdout.close() if proc.stdout else None
+    proc.stderr.close() if proc.stderr else None
+
+    output = stdout + "".join(all_lines)
 
     if log_file:
         log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -523,9 +556,7 @@ def run_ffmpeg(args: list[str], log_file: Optional[Path] = None) -> tuple[bool, 
     success = proc.returncode == 0
 
     # Clean up 0-byte output from failed runs
-    # Find output path: scan for last positional arg that looks like a file path
     output_path = None
-    # Find output after -movflags +faststart
     try:
         mov_idx = args.index("-movflags")
         if mov_idx + 2 < len(args):
@@ -533,7 +564,6 @@ def run_ffmpeg(args: list[str], log_file: Optional[Path] = None) -> tuple[bool, 
     except ValueError:
         pass
     if not output_path:
-        # Fallback: last arg if it looks like a path (not a flag)
         last = args[-1]
         if not last.startswith("-") and ("/" in last or "\\" in last or "." in last):
             output_path = Path(last)
@@ -552,15 +582,42 @@ def run_ffmpeg(args: list[str], log_file: Optional[Path] = None) -> tuple[bool, 
     return success, output
 
 
+def _condense_progress(line: str) -> str:
+    """Extract key fields from an ffmpeg status line into a compact display string.
+
+    Input:  ``frame=  180 fps=30 q=-1.0 size=   15360kB time=00:00:06.00 bitrate=20971.5kbits/s speed=1.0x``
+    Output: ``"frame 180  fps 30  7.0M  speed 1.0x"``
+    """
+    parts = []
+    m = re.search(r"frame=\s*(\d+)", line)
+    if m:
+        parts.append(f"frame {m.group(1)}")
+    m = re.search(r"fps=\s*([\d.]+)", line)
+    if m:
+        parts.append(f"fps {m.group(1)}")
+    m = re.search(r"bitrate=\s*([\d.]+)kbits/s", line)
+    if m:
+        kbps = float(m.group(1))
+        if kbps >= 1000:
+            parts.append(f"{kbps / 1000:.1f}M")
+        else:
+            parts.append(f"{kbps:.0f}K")
+    m = re.search(r"speed=\s*([\d.]+)x", line)
+    if m:
+        parts.append(f"speed {m.group(1)}x")
+    return "  ".join(parts) if parts else line
+
+
 def convert_video(
     input_file: Path,
     output_file: Path,
     enc: EncoderSettings,
     log_file: Optional[Path] = None,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> bool:
     """Convert a single video to Steam spec."""
     args = build_ffmpeg_args(enc, str(output_file), input_file=str(input_file))
-    success, _ = run_ffmpeg(args, log_file)
+    success, _ = run_ffmpeg(args, log_file, on_progress=on_progress)
     return success
 
 
@@ -569,10 +626,11 @@ def concat_videos(
     output_file: Path,
     enc: EncoderSettings,
     log_file: Optional[Path] = None,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> bool:
     """Concatenate multiple videos to Steam spec."""
     args = build_ffmpeg_args(enc, str(output_file), playlist=str(playlist_file))
-    success, _ = run_ffmpeg(args, log_file)
+    success, _ = run_ffmpeg(args, log_file, on_progress=on_progress)
     return success
 
 
@@ -853,6 +911,18 @@ def show_prep_phase():
     success_count = 0
     fail_count = 0
 
+    # ── Progress display helper ──
+    def _show_progress(status: str) -> None:
+        """Display a live-updating ffmpeg progress line with carriage return."""
+        # Truncate to terminal width (assume 100 cols if unavailable)
+        cols = shutil.get_terminal_size().columns or 100
+        # Clean line (overwrite previous) + new status
+        line = f"\r\033[K  [dim]{status}[/]" if RICH else f"\r\033[K  {status}"
+        # Strip Rich markup for the display below
+        clean = re.sub(r"\[/?[^\]]+\]", "", line) if RICH else line
+        clean = clean[:cols]
+        print(clean, end="", flush=True)
+
     for gname in sorted(game_groups):
         files = sorted(game_groups[gname], key=lambda f: f.name)
         safe_name = sanitize_filename(gname)
@@ -872,7 +942,9 @@ def show_prep_phase():
             # Single file — just convert
             prep_log = LOG_DIR / f"{safe_name}_prep.log"
             console.print(f"\n[dim]Converting {rich_escape(gname)}...[/]")
-            ok = convert_video(files[0], out_path, enc, log_file=prep_log)
+            ok = convert_video(files[0], out_path, enc, log_file=prep_log, on_progress=_show_progress)
+            # Clear progress line
+            print("\r\033[K", end="", flush=True)
             if ok:
                 console.print(f"[green]✓ {rich_escape(gname)} converted successfully[/]")
                 success_count += 1
@@ -896,7 +968,9 @@ def show_prep_phase():
                 temp_out = temp_dir / f"{f.stem}_steam.mp4"
                 part_log = LOG_DIR / f"{safe_name}_part{idx}_prep.log"
                 console.print(f"\n[dim]Converting {f.name}...[/]")
-                ok = convert_video(f, temp_out, enc, log_file=part_log)
+                ok = convert_video(f, temp_out, enc, log_file=part_log, on_progress=_show_progress)
+                # Clear progress line
+                print("\r\033[K", end="", flush=True)
                 if not ok:
                     console.print(f"[red]✗ Failed to convert {f.name}[/]")
                     console.print(f"  [dim]Full log: {part_log}[/]")
@@ -913,7 +987,6 @@ def show_prep_phase():
                 playlist_path = temp_dir / "playlist.txt"
                 with open(playlist_path, "w") as pf:
                     for cf in converted:
-                        # ffmpeg concat demuxer interprets paths literally — no shell
                         path_str = str(cf).replace("\\", "/")
                         if "'" in path_str:
                             console.print(f"[yellow]Warning: path contains quote, concat may fail: {cf.name}[/]")
@@ -922,7 +995,9 @@ def show_prep_phase():
                 # Concat
                 concat_log = LOG_DIR / f"{safe_name}_concat.log"
                 console.print(f"\n[dim]Concatenating {len(converted)} files for {rich_escape(gname)}...[/]")
-                ok = concat_videos(playlist_path, out_path, enc, log_file=concat_log)
+                ok = concat_videos(playlist_path, out_path, enc, log_file=concat_log, on_progress=_show_progress)
+                # Clear progress line
+                print("\r\033[K", end="", flush=True)
 
                 if ok:
                     console.print(f"[green]✓ {rich_escape(gname)} ready: {out_path}[/]")
