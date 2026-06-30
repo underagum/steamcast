@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   SteamCast — Prepare and broadcast multiple game trailers to Steam store pages.
 .DESCRIPTION
@@ -399,7 +399,8 @@ function Invoke-FFmpegConvert {
     }
     
     if ($ShowOutput) {
-        Show-Step "Running: $($Script:FFmpegPath) $($ffArgs -join ' ')"
+        $argString = $ffArgs -join ' '
+        Show-Step "Running: $($Script:FFmpegPath) $argString"
     }
     
     if ($ShowOutput) {
@@ -551,7 +552,8 @@ function Invoke-Prep {
     
     if ($videoFiles.Count -eq 0) {
         Show-Error "No video files found in input folder."
-        Show-Info "Supported formats: $($videoExtensions -join ', ')"
+        $extList = $videoExtensions -join ', '
+        Show-Info "Supported formats: $extList"
         Pause-And-Continue
         return
     }
@@ -729,7 +731,8 @@ function Invoke-CastSetup {
             }
         }
         if ($suggestions.Count -gt 0) {
-            Write-Host "Games needing keys: $($suggestions -join ', ')" -ForegroundColor $Script:CYellow
+            $suggestionList = $suggestions -join ', '
+            Write-Host "Games needing keys: $suggestionList" -ForegroundColor $Script:CYellow
         }
         
         $gameName = Get-UserInput "Enter game name (or leave empty to finish)"
