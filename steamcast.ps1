@@ -370,6 +370,7 @@ function Invoke-FFmpegConvert {
     param(
         [string]$InputFile,
         [string]$OutputFile,
+        [string]$LogFile,
         [switch]$ShowOutput
     )
     
@@ -402,25 +403,42 @@ function Invoke-FFmpegConvert {
     if ($enc.cbr_flags) {
         $ffArgs = $ffArgs[0..6] + @($enc.cbr_flags -split ' ') + $ffArgs[7..($ffArgs.Length-1)]
     }
-    
+
     if ($ShowOutput) {
         $argString = $ffArgs -join ' '
         Show-Step "Running: $($Script:FFmpegPath) $argString"
-    }
-    
-    if ($ShowOutput) {
         & $Script:FFmpegPath @ffArgs
+        $success = $LASTEXITCODE -eq 0 -and (Test-Path $OutputFile)
     } else {
-        $null = & $Script:FFmpegPath @ffArgs 2>&1
+        # Capture all ffmpeg stderr/stdout for logging
+        $ffOutput = & $Script:FFmpegPath @ffArgs 2>&1
+        $success = $LASTEXITCODE -eq 0 -and (Test-Path $OutputFile)
+        # Write to per-game log if LogFile parameter was passed
+        if ($LogFile) {
+            try {
+                $ffOutput | Out-File $LogFile -Encoding utf8 -ErrorAction SilentlyContinue
+            } catch {}
+        }
     }
-    
-    return $LASTEXITCODE -eq 0 -and (Test-Path $OutputFile)
+    # Clean up 0-byte or partial output files from failed runs
+    if ($success) {
+        $fileInfo = Get-Item $OutputFile -ErrorAction SilentlyContinue
+        if ($fileInfo -and $fileInfo.Length -eq 0) {
+            Remove-Item $OutputFile -Force -ErrorAction SilentlyContinue
+            $success = $false
+        }
+    }
+    if (-not $success -and (Test-Path $OutputFile)) {
+        Remove-Item $OutputFile -Force -ErrorAction SilentlyContinue
+    }
+    return $success
 }
 
 function Invoke-FFmpegConcat {
     param(
         [string]$PlaylistFile,
         [string]$OutputFile,
+        [string]$LogFile,
         [switch]$ShowOutput
     )
     
@@ -457,14 +475,30 @@ function Invoke-FFmpegConcat {
     }
 
     Show-Step "Concatenating..."
-    
+
     if ($ShowOutput) {
         & $Script:FFmpegPath @ffArgs
+        $success = $LASTEXITCODE -eq 0 -and (Test-Path $OutputFile)
     } else {
-        $null = & $Script:FFmpegPath @ffArgs 2>&1
+        $ffOutput = & $Script:FFmpegPath @ffArgs 2>&1
+        $success = $LASTEXITCODE -eq 0 -and (Test-Path $OutputFile)
+        if ($LogFile) {
+            try {
+                $ffOutput | Out-File $LogFile -Encoding utf8 -ErrorAction SilentlyContinue
+            } catch {}
+        }
     }
-    
-    return $LASTEXITCODE -eq 0 -and (Test-Path $OutputFile)
+    if ($success) {
+        $fileInfo = Get-Item $OutputFile -ErrorAction SilentlyContinue
+        if ($fileInfo -and $fileInfo.Length -eq 0) {
+            Remove-Item $OutputFile -Force -ErrorAction SilentlyContinue
+            $success = $false
+        }
+    }
+    if (-not $success -and (Test-Path $OutputFile)) {
+        Remove-Item $OutputFile -Force -ErrorAction SilentlyContinue
+    }
+    return $success
 }
 
 function Get-FileDuration {
@@ -510,11 +544,12 @@ function Get-StreamTime {
 function Get-GameNameFromFile {
     param([string]$FileName)
     $base = [System.IO.Path]::GetFileNameWithoutExtension($FileName)
-    $match = [regex]::Match($base, "^(.+)_(\d+)$")
+    $match = [regex]::Match($base, "^(.+?)_(\d+)$")
     if ($match.Success) {
         return @{
             gameName  = $match.Groups[1].Value.Trim()
-            partNum   = [int]$match.Groups[2].Value
+            $pn = 0; if ([int]::TryParse($match.Groups[2].Value, [ref]$pn)) { $pn } else { 0 }
+            partNum   = $pn
             isPart    = $true
         }
     }
@@ -533,6 +568,7 @@ function Invoke-Prep {
     # Ensure directories
     if (-not (Test-Path $Script:InputDir)) { New-Item -ItemType Directory -Path $Script:InputDir -Force | Out-Null }
     if (-not (Test-Path $Script:OutputDir)) { New-Item -ItemType Directory -Path $Script:OutputDir -Force | Out-Null }
+    if (-not (Test-Path $Script:LogDir)) { New-Item -ItemType Directory -Path $Script:LogDir -Force | Out-Null }
     
     # Check for FFmpeg
     if (-not (Test-FFmpegAvailable)) {
@@ -601,6 +637,8 @@ function Invoke-Prep {
     if (-not $proceed) { return }
     
     # Step 4: Process each game group
+    $successCount = 0
+    $failCount = 0
     foreach ($gName in $gameGroups.Keys | Sort-Object) {
         $files = $gameGroups[$gName] | Sort-Object Name
         # Sanitize game name for filesystem safety
@@ -618,35 +656,49 @@ function Invoke-Prep {
         }
         
         if ($files.Count -eq 1) {
-            # Single file — just convert
+            # Single file — just convert (with logging)
+            $prepLog = Join-Path $Script:LogDir "$safeName`_prep.log"
             Show-Step "Converting $gName..."
-            $ok = Invoke-FFmpegConvert -InputFile $files[0].FullName -OutputFile $outPath
+            $ok = Invoke-FFmpegConvert -InputFile $files[0].FullName -OutputFile $outPath -LogFile $prepLog
             if ($ok) {
                 Show-Ok "$gName converted successfully"
+                $successCount++
             } else {
                 Show-Error "Failed to convert $gName"
+                Show-Info "  Full log: $prepLog"
+                if (Test-Path $prepLog) {
+                    Show-Info "  Last 10 lines:"
+                    Get-Content $prepLog -Tail 10 | ForEach-Object { Write-Host "    $_" -ForegroundColor $Script:CWhite }
+                }
+                $failCount++
             }
         } else {
             # Multiple files — convert each, then concat
             $tempGuid = [System.Guid]::NewGuid().ToString().Substring(0,8)
             $tempDir = Join-Path $Script:InputDir ".temp_$tempGuid"
             New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-            
+
             $convertedFiles = @()
             $allOk = $true
-            
+
             foreach ($f in $files) {
                 $tempOut = Join-Path $tempDir "$($f.BaseName)_steam.mp4"
+                $partLog = Join-Path $Script:LogDir "$safeName`_part_prep.log"
                 Show-Step "Converting $($f.Name)..."
-                $ok = Invoke-FFmpegConvert -InputFile $f.FullName -OutputFile $tempOut
+                $ok = Invoke-FFmpegConvert -InputFile $f.FullName -OutputFile $tempOut -LogFile $partLog
                 if (-not $ok) {
                     Show-Error "Failed to convert $($f.Name)"
+                    Show-Info "  Full log: $partLog"
+                    if (Test-Path $partLog) {
+                        Show-Info "  Last 10 lines:"
+                        Get-Content $partLog -Tail 10 | ForEach-Object { Write-Host "    $_" -ForegroundColor $Script:CWhite }
+                    }
                     $allOk = $false
                     break
                 }
                 $convertedFiles += $tempOut
             }
-            
+
             if ($allOk) {
                 # Create playlist for concat — escape single quotes for filenames with special chars
                 $playlistPath = Join-Path $tempDir "playlist.txt"
@@ -654,39 +706,54 @@ function Invoke-Prep {
                     $escaped = $_.Replace('\','/').Replace("'","'\\''")
                     "file '$escaped'"
                 } | Set-Content $playlistPath -Encoding ASCII
-                
-                # Concat
+
+                # Concat (with logging)
+                $concatLog = Join-Path $Script:LogDir "$safeName`_concat.log"
                 Show-Step "Concatenating $($convertedFiles.Count) files for $gName..."
-                $ok = Invoke-FFmpegConcat -PlaylistFile $playlistPath -OutputFile $outPath
+                $ok = Invoke-FFmpegConcat -PlaylistFile $playlistPath -OutputFile $outPath -LogFile $concatLog
                 if (-not $ok) {
                     # Fallback: corrupted AAC frames in source may cause concat demuxer failure.
-                    # Retry with audio re-encode (forces FFmpeg to error-recover through bad frames).
                     Show-Warn "Concat failed — retrying with audio re-encode (corrupt AAC workaround)..."
-                    $ok = Invoke-FFmpegConcat -PlaylistFile $playlistPath -OutputFile $outPath -ShowOutput
+                    $ok = Invoke-FFmpegConcat -PlaylistFile $playlistPath -OutputFile $outPath -LogFile $concatLog -ShowOutput
                 }
                 if ($ok) {
                     Show-Ok "$gName ready: $outPath"
+                    $successCount++
                 } else {
-                    Show-Error "Failed to concatenate $gName — try re-encoding source files first."
+                    Show-Error "Failed to concatenate $gName"
+                    Show-Info "  Full log: $concatLog"
+                    if (Test-Path $concatLog) {
+                        Show-Info "  Last 10 lines:"
+                        Get-Content $concatLog -Tail 10 | ForEach-Object { Write-Host "    $_" -ForegroundColor $Script:CWhite }
+                    }
+                    $failCount++
                 }
+            } else {
+                $failCount++
             }
-            
+
             # Cleanup temp
             if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
         }
     }
-    
+
     # Report results
     Write-Host "`n=== Prep Complete ===" -ForegroundColor $Script:CGreen
-    $outputFiles = Get-ChildItem -Path $Script:OutputDir -Filter "*.mp4"
-    if ($outputFiles.Count -gt 0) {
-        Show-Ok "Prepared $($outputFiles.Count) game file(s):"
+    if ($successCount -gt 0) {
+        Show-Ok "$successCount succeeded"
+        $outputFiles = Get-ChildItem -Path $Script:OutputDir -Filter "*.mp4"
         foreach ($f in $outputFiles | Sort-Object Name) {
             $size = [math]::Round($f.Length / 1MB, 1)
             Show-Info "  $($f.Name) ($size MB)"
         }
     }
-    
+    if ($failCount -gt 0) {
+        Show-Error "$failCount failed — see full logs in: $($Script:LogDir)"
+    }
+    if ($successCount -eq 0 -and $failCount -eq 0) {
+        Show-Warn "No files were processed."
+    }
+
     Pause-And-Continue
 }
 
