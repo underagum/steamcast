@@ -271,10 +271,32 @@ def download_ffmpeg(console) -> bool:
 
     zip_path = FFMPEG_DIR / "ffmpeg.zip"
     max_attempts = DOWNLOAD_RETRY_MAX
+
     for attempt in range(1, max_attempts + 1):
         try:
             console.print(f"[dim]Download attempt {attempt}/{max_attempts}...[/]")
-            urllib.request.urlretrieve(FFMPEG_URL, zip_path)
+
+            if RICH:
+                with Progress(
+                    TextColumn("[bold blue]{task.description}"),
+                    BarColumn(),
+                    DownloadColumn(),
+                    TransferSpeedColumn(),
+                    TimeRemainingColumn(),
+                    console=console,
+                    transient=True,
+                ) as progress:
+                    task = progress.add_task("Downloading...", total=None)
+
+                    def reporthook(block_num: int, block_size: int, total_size: int):
+                        downloaded = block_num * block_size
+                        if total_size > 0:
+                            progress.update(task, total=total_size, completed=downloaded)
+
+                    urllib.request.urlretrieve(FFMPEG_URL, zip_path, reporthook=reporthook)
+            else:
+                urllib.request.urlretrieve(FFMPEG_URL, zip_path)
+
             break
         except Exception as e:
             console.print(f"[yellow]Download failed: {e}[/]")
@@ -285,10 +307,27 @@ def download_ffmpeg(console) -> bool:
                 console.print(f"[dim]Download manually from: {FFMPEG_URL}[/]")
                 return False
 
-    console.print("[dim]Extracting...[/]")
+    # ── Extraction ──
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(FFMPEG_DIR)
+            members = zf.infolist()
+
+            if RICH:
+                with Progress(
+                    TextColumn("[bold blue]{task.description}"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    console=console,
+                    transient=True,
+                ) as progress:
+                    task = progress.add_task("Extracting...", total=len(members))
+                    for member in members:
+                        zf.extract(member, FFMPEG_DIR)
+                        progress.advance(task)
+            else:
+                console.print("[dim]Extracting...[/]")
+                zf.extractall(FFMPEG_DIR)
+
         # Find ffmpeg.exe in extracted tree
         found = False
         for root, _, files in os.walk(FFMPEG_DIR):
@@ -583,6 +622,10 @@ try:
     from rich.live import Live
     from rich.prompt import Prompt, Confirm
     from rich.align import Align
+    from rich.progress import (
+        Progress, BarColumn, TextColumn, DownloadColumn,
+        TransferSpeedColumn, TimeRemainingColumn,
+    )
 
     console = Console()
     RICH = True
