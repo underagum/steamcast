@@ -11,6 +11,7 @@ Usage:
     python steamcast.py cast     # Jump to stream toggle
 """
 
+import builtins
 import json
 import os
 import re
@@ -411,8 +412,14 @@ except ImportError:
             # Strip rich markup
             text = re.sub(r"\[/?\w+\]", "", text)
             text = re.sub(r"\[dim\].*?\[/\]", "", text)
-            # Keep the partial text of dim blocks
             print(text)
+
+        def input(self, prompt="", **kwargs):
+            """Styled input fallback — strips markup and passes to builtin."""
+            text = str(prompt)
+            text = re.sub(r"\[/?\w+\]", "", text)
+            text = re.sub(r"\[dim\].*?\[/\]", "", text)
+            return builtins.input(text)
 
         def rule(self, *args, **kwargs):
             print("-" * 60)
@@ -447,7 +454,7 @@ def show_prep_phase():
     # Ensure FFmpeg
     if not find_ffmpeg():
         if not download_ffmpeg(console):
-            Confirm.ask("[dim]Press Enter to continue[/]") if RICH else input()
+            console.input("[dim]Press Enter to continue...[/]") if RICH else input("\nPress Enter to continue...")
             return
 
     # Step 1: Tell user where to put files
@@ -474,7 +481,7 @@ def show_prep_phase():
 
     if not video_files:
         console.print("[red]No video files found in input folder.[/]")
-        Confirm.ask("[dim]Press Enter to continue[/]") if RICH else input()
+        console.input("[dim]Press Enter to continue...[/]") if RICH else input("\nPress Enter to continue...")
         return
 
     table = Table(title="Found Videos", border_style="green")
@@ -608,7 +615,7 @@ def show_prep_phase():
         console.print("[yellow]No files were processed.[/]")
 
     if RICH:
-        Confirm.ask("[dim]Press Enter to continue[/]")
+        console.input("[dim]Press Enter to continue...[/]")
     else:
         input("\nPress Enter to continue...")
 
@@ -686,7 +693,7 @@ def show_cast_setup():
 
     console.print("[green]✓ Setup complete.[/]")
     if RICH:
-        Confirm.ask("[dim]Press Enter to continue[/]")
+        console.input("[dim]Press Enter to continue...[/]")
     else:
         input("\nPress Enter to continue...")
 
@@ -792,9 +799,9 @@ def show_cast():
             if not to_start:
                 console.print("[yellow]No games ready to broadcast.[/]")
                 if RICH:
-                    Confirm.ask("[dim]Press Enter to continue[/]")
+                    console.input("[dim]Press Enter to continue...[/]")
                 else:
-                    input()
+                    input("\nPress Enter to continue...")
                 continue
 
             run_cast_stream(to_start)
@@ -878,9 +885,9 @@ def run_cast_stream(games: list[dict]):
     if not active_streams:
         console.print("[red]No streams started.[/]")
         if RICH:
-            Confirm.ask("[dim]Press Enter to continue[/]")
+            console.input("[dim]Press Enter to continue...[/]")
         else:
-            input()
+            input("\nPress Enter to continue...")
         return
 
     # Monitor loop
@@ -990,9 +997,9 @@ def run_cast_stream(games: list[dict]):
 
     console.print("\n[green]✓ All streams stopped.[/]")
     if RICH:
-        Confirm.ask("[dim]Press Enter to continue[/]")
+        console.input("[dim]Press Enter to continue...[/]")
     else:
-        input()
+        input("\nPress Enter to continue...")
 
 
 def version_check():
