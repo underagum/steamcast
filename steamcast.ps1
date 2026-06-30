@@ -95,12 +95,16 @@ function Initialize-JobObject {
 }
 
 function Cleanup-JobObject {
-    if ($Script:JobHandle -ne [System.IntPtr]::Zero) {
-        Write-Host "[*] Cleaning up child processes..." -ForegroundColor $Script:CYellow
-        [WinJob]::TerminateJobObject($Script:JobHandle, 1) | Out-Null
-        [WinJob]::CloseHandle($Script:JobHandle) | Out-Null
-        $Script:JobHandle = [System.IntPtr]::Zero
-        Write-Host "[√] Done." -ForegroundColor $Script:CGreen
+    try {
+        if ($Script:JobHandle -ne [System.IntPtr]::Zero) {
+            Write-Host "[*] Cleaning up child processes..." -ForegroundColor $Script:CYellow
+            [WinJob]::TerminateJobObject($Script:JobHandle, 1) | Out-Null
+            [WinJob]::CloseHandle($Script:JobHandle) | Out-Null
+            $Script:JobHandle = [System.IntPtr]::Zero
+            Write-Host "[√] Done." -ForegroundColor $Script:CGreen
+        }
+    } catch {
+        # Job Object cleanup may fail in some environments — non-critical
     }
 }
 
@@ -139,7 +143,7 @@ function Write-Banner {
     Clear-Host
     Write-Host @"
   ╔══════════════════════════════════════╗
-  ║        STEAMCAST v$($Script:Version)        ║
+  ║         STEAMCAST v$($Script:Version)         ║
   ║   Steam broadcast video prep & cast  ║
   ╚══════════════════════════════════════╝
 "@ -ForegroundColor $Script:CMagenta
@@ -457,10 +461,14 @@ function Invoke-FFmpegConcat {
 
 function Get-FileDuration {
     param([string]$FilePath)
-    $result = & $Script:FFmpegPath -i "$FilePath" -hide_banner 2>&1 | Select-String "Duration:"
-    if ($result) {
-        $match = [regex]::Match($result, "Duration: (\d+:\d+:\d+\.\d+)")
-        if ($match.Success) { return $match.Groups[1].Value }
+    try {
+        $result = & $Script:FFmpegPath -i "$FilePath" -hide_banner 2>&1 | Select-String "Duration:"
+        if ($result) {
+            $match = [regex]::Match($result, "Duration: (\d+:\d+:\d+\.\d+)")
+            if ($match.Success) { return $match.Groups[1].Value }
+        }
+    } catch {
+        # ffprobe failed — return placeholder
     }
     return "??:??:??"
 }
@@ -1150,10 +1158,14 @@ try {
     Write-Host "╚════════════════════════════════════════════╝" -ForegroundColor Red
     Write-Host ""
     Write-Host "Message:     $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "Line:        $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Red
-    Write-Host "Position:    $($_.InvocationInfo.OffsetInLine)" -ForegroundColor Red
-    Write-Host "StackTrace:" -ForegroundColor Yellow
-    Write-Host "$($_.ScriptStackTrace)" -ForegroundColor Gray
+    try {
+        Write-Host "Line:        $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Red
+        Write-Host "Position:    $($_.InvocationInfo.OffsetInLine)" -ForegroundColor Red
+        Write-Host "StackTrace:" -ForegroundColor Yellow
+        Write-Host "$($_.ScriptStackTrace)" -ForegroundColor Gray
+    } catch {
+        # InvocationInfo may be null — skip details
+    }
     Write-Host ""
     Write-Host "[i] Report this at https://github.com/underagum/steamcast/issues" -ForegroundColor Cyan
 }
