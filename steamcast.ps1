@@ -139,7 +139,7 @@ function Write-Banner {
     Clear-Host
     Write-Host @"
   ╔══════════════════════════════════════╗
-  ║          STEAMCAST v$($Script:Version)            ║
+  ║        STEAMCAST v$($Script:Version)        ║
   ║   Steam broadcast video prep & cast  ║
   ╚══════════════════════════════════════╝
 "@ -ForegroundColor $Script:CMagenta
@@ -253,12 +253,6 @@ function Set-GameActive {
 function Test-FFmpegAvailable {
     if (Test-Path $Script:FFmpegExe) {
         $Script:FFmpegPath = $Script:FFmpegExe
-        return $true
-    }
-    # Check PATH
-    $pathExe = Get-Command "ffmpeg.exe" -ErrorAction SilentlyContinue
-    if ($pathExe) {
-        $Script:FFmpegPath = $pathExe.Source
         return $true
     }
     return $false
@@ -393,9 +387,9 @@ function Invoke-FFmpegConvert {
         $OutputFile
     )
     
-    # Insert encoder-specific CBR flags
+    # Insert encoder-specific CBR flags (after -preset <value>)
     if ($enc.cbr_flags) {
-        $ffArgs = $ffArgs[0..3] + @($enc.cbr_flags -split ' ') + $ffArgs[4..($ffArgs.Length-1)]
+        $ffArgs = $ffArgs[0..6] + @($enc.cbr_flags -split ' ') + $ffArgs[7..($ffArgs.Length-1)]
     }
     
     if ($ShowOutput) {
@@ -445,9 +439,9 @@ function Invoke-FFmpegConcat {
         $OutputFile
     )
     
-    # Insert encoder-specific CBR flags
+    # Insert encoder-specific CBR flags (after -preset <value>)
     if ($enc.cbr_flags) {
-        $ffArgs = $ffArgs[0..3] + @($enc.cbr_flags -split ' ') + $ffArgs[4..($ffArgs.Length-1)]
+        $ffArgs = $ffArgs[0..6] + @($enc.cbr_flags -split ' ') + $ffArgs[7..($ffArgs.Length-1)]
     }
     
     Show-Step "Concatenating..."
