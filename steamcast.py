@@ -154,21 +154,22 @@ _net_baseline_time: Optional[float] = None
 _proc_cache: dict[int, "psutil.Process"] = {}  # pid → Process object, survives refreshes
 
 
-def _read_log_bitrate(log_path: Path, offset_key: str, offsets: dict) -> str:
-    """Extract latest ``bitrate=`` value from ffmpeg stderr log. Returns '—' on miss."""
-    offset = offsets.get(offset_key, 0)
+def _read_log_bitrate(log_path: Path) -> str:
+    """Read last 8 KB of ffmpeg stderr log to find latest ``bitrate=`` value.
+    Returns '—' if no bitrate line found or file is unreadable."""
     try:
         with open(log_path, "r", errors="replace") as f:
-            f.seek(offset)
+            f.seek(0, 2)  # end of file
+            size = f.tell()
+            if size == 0:
+                return "—"
+            chunk_start = max(0, size - 8192)
+            f.seek(chunk_start)
             new_data = f.read()
-            offsets[offset_key] = f.tell()
     except (OSError, ValueError):
         return "—"
 
-    if not new_data:
-        return "—"
-
-    # Scan backwards to find the last bitrate= line in this chunk
+    # Scan backwards — last bitrate= line is the current one
     for line in reversed(new_data.splitlines()):
         m = re.search(r"bitrate=\s*([\d.]+)kbits/s", line)
         if m:
@@ -207,8 +208,7 @@ def get_per_stream_stats(active_streams: dict) -> dict:
             cpu = 0.0
 
         # ── Bitrate from ffmpeg stderr log ──
-        offsets = stream.setdefault("_read_offsets", {})
-        bitrate = _read_log_bitrate(stream["log_file"], f"bitrate_{pid}", offsets)
+        bitrate = _read_log_bitrate(stream["log_file"])
 
         result[gname] = {"cpu": cpu, "bitrate": bitrate}
 
@@ -300,6 +300,7 @@ def download_ffmpeg(console) -> bool:
             break
         except Exception as e:
             console.print(f"[yellow]Download failed: {e}[/]")
+            zip_path.unlink(missing_ok=True)
             if attempt < max_attempts:
                 time.sleep(DOWNLOAD_RETRY_DELAY)
             else:
@@ -351,6 +352,7 @@ def download_ffmpeg(console) -> bool:
         return True
     except Exception as e:
         console.print(f"[red]Extraction failed: {e}[/]")
+        zip_path.unlink(missing_ok=True)
         return False
 
 
@@ -428,6 +430,7 @@ def _validate_encoder(ffmpeg: str, enc: EncoderSettings) -> tuple[bool, str]:
         "-c:v", enc.codec,
         "-preset", enc.preset,
         *enc.cbr_flags,
+        "-b:v", "100k",
         "-f", "null", "-",
     ]
     try:
@@ -982,7 +985,7 @@ def show_cast_setup():
                     key = ""
                 masked = f"{key[:RTMP_KEY_DISPLAY_CHARS]}..." if key else "(no key)"
                 safe_g = sanitize_filename(gname)
-                vid = available_videos.get(safe_g) or available_videos.get(gname)
+                vid = available_videos.get(safe_g)
                 video_status = "✓" if vid else "⚠ no video"
                 console.print(f"  [white][{i}][/] {rich_escape(gname)}  [dim]{masked}[/]  {video_status}")
         else:
@@ -999,7 +1002,7 @@ def show_cast_setup():
         # Menu
         console.print(f"\n[yellow]{'─' * 40}[/]")
         if existing:
-            console.print("[white]\\[1-{n}][/] Edit game  |  [cyan][A][/] Add new  |  [red][D][/] Delete  |  [dim][Q][/] Done".format(n=len(existing)))
+            console.print(f"[white]\\[1-{len(existing)}][/] Edit game  |  [cyan][A][/] Add new  |  [red][D][/] Delete  |  [dim][Q][/] Done")
         else:
             console.print("[cyan][A][/] Add new game  |  [dim][Q][/] Done")
         console.print()
@@ -1132,20 +1135,22 @@ def show_cast():
     config_games = sorted(cfg["games"].keys())
 
     if not config_games:
-        console.print("[yellow]No games configured yet.[/]")
-        if RICH:
-            go = Confirm.ask("Go to setup?")
-        else:
-            go = input("Go to setup? (y/n): ").lower().startswith("y")
-        if go:
+        while not config_games:
+            console.print("[yellow]No games configured yet.[/]")
+            if RICH:
+                go = Confirm.ask("Go to setup?")
+            else:
+                go = input("Go to setup? (y/n): ").lower().startswith("y")
+            if not go:
+                return
             show_cast_setup()
-            show_cast()
-        return
+            cfg = load_config()
+            config_games = sorted(cfg["games"].keys())
 
     # Scan output
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     available_videos = {
-        f.stem.lower(): f for f in OUTPUT_DIR.glob("*.mp4") if f.stat().st_size > 0
+        f.stem: f for f in OUTPUT_DIR.glob("*.mp4") if f.stat().st_size > 0
     }
 
     while True:
@@ -1162,7 +1167,7 @@ def show_cast():
             else:
                 is_active = False
                 has_key = False
-            has_video = gname.lower() in available_videos or sanitize_filename(gname).lower() in available_videos
+            has_video = sanitize_filename(gname) in available_videos
 
             toggle = "[green]ON[/]" if is_active else "[dim]OFF[/]"
             if has_video:
@@ -1204,13 +1209,13 @@ def show_cast():
             cfg = load_config()
             config_games = sorted(cfg["games"].keys())
             available_videos = {
-                f.stem.lower(): f for f in OUTPUT_DIR.glob("*.mp4") if f.stat().st_size > 0
+                f.stem: f for f in OUTPUT_DIR.glob("*.mp4") if f.stat().st_size > 0
             }
         elif choice == "p":
             show_prep_phase()
             # Refresh video list after Prep may have created new files
             available_videos = {
-                f.stem.lower(): f for f in OUTPUT_DIR.glob("*.mp4") if f.stat().st_size > 0
+                f.stem: f for f in OUTPUT_DIR.glob("*.mp4") if f.stat().st_size > 0
             }
             continue
         elif choice == "s":
