@@ -78,6 +78,14 @@ SPEC = SteamSpec()
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".webm", ".flv", ".m4v"}
 _cached_encoder: Optional[EncoderSettings] = None
 
+# ─── Named Constants ──────────────────────────────────────────────────
+RTMP_KEY_DISPLAY_CHARS = 8       # number of prefix chars shown for masked RTMP keys
+SANITIZED_FILENAME_MAX = 80      # max length for sanitized filenames
+DOWNLOAD_RETRY_MAX = 5           # max FFmpeg download attempts
+DOWNLOAD_RETRY_DELAY = 3         # seconds between download retries
+LOG_TAIL_LINES = 10              # lines shown on prep failure
+VERSION_CHECK_TIMEOUT = 5        # seconds timeout for version check HTTP request
+
 
 def repair_config(cfg: dict) -> dict:
     """Remove obviously corrupted game entries and return cleaned config."""
@@ -103,7 +111,7 @@ def repair_config(cfg: dict) -> dict:
     return cfg
 
 
-def sanitize_filename(name: str, max_len: int = 80) -> str:
+def sanitize_filename(name: str, max_len: int = SANITIZED_FILENAME_MAX) -> str:
     """Remove path-illegal characters and truncate."""
     safe = re.sub(r'[<>:"/\\|?*]', "_", name)
     return safe[:max_len]
@@ -138,17 +146,18 @@ def download_ffmpeg(console) -> bool:
     FFMPEG_DIR.mkdir(parents=True, exist_ok=True)
 
     zip_path = FFMPEG_DIR / "ffmpeg.zip"
-    for attempt in range(1, 6):
+    max_attempts = DOWNLOAD_RETRY_MAX
+    for attempt in range(1, max_attempts + 1):
         try:
-            console.print(f"[dim]Download attempt {attempt}/5...[/]")
+            console.print(f"[dim]Download attempt {attempt}/{max_attempts}...[/]")
             urllib.request.urlretrieve(FFMPEG_URL, zip_path)
             break
         except Exception as e:
             console.print(f"[yellow]Download failed: {e}[/]")
-            if attempt < 5:
-                time.sleep(3)
+            if attempt < max_attempts:
+                time.sleep(DOWNLOAD_RETRY_DELAY)
             else:
-                console.print("[red]Could not download FFmpeg after 5 attempts.[/]")
+                console.print(f"[red]Could not download FFmpeg after {max_attempts} attempts.[/]")
                 console.print(f"[dim]Download manually from: {FFMPEG_URL}[/]")
                 return False
 
@@ -157,6 +166,7 @@ def download_ffmpeg(console) -> bool:
         with zipfile.ZipFile(zip_path, "r") as zf:
             zf.extractall(FFMPEG_DIR)
         # Find ffmpeg.exe in extracted tree
+        found = False
         for root, _, files in os.walk(FFMPEG_DIR):
             for fname in files:
                 if "ffmpeg" in fname.lower() and (
@@ -164,7 +174,10 @@ def download_ffmpeg(console) -> bool:
                 ):
                     src = Path(root) / fname
                     src.rename(FFMPEG_EXE)
+                    found = True
                     break
+            if found:
+                break
         # Cleanup
         for d in FFMPEG_DIR.iterdir():
             if d.is_dir() and d.name != "ffmpeg":
@@ -217,8 +230,8 @@ def detect_encoder(console) -> EncoderSettings:
 
 def build_ffmpeg_args(
     enc: EncoderSettings,
-    input_file: str,
     output_file: str,
+    input_file: Optional[str] = None,
     playlist: Optional[str] = None,
 ) -> list[str]:
     """Build ffmpeg argument list for convert or concat."""
@@ -226,8 +239,10 @@ def build_ffmpeg_args(
 
     if playlist:
         args += ["-f", "concat", "-safe", "0", "-i", playlist]
-    else:
+    elif input_file:
         args += ["-i", input_file]
+    else:
+        raise ValueError("Either input_file or playlist must be provided")
 
     args += [
         "-c:v", enc.codec,
@@ -286,7 +301,7 @@ def run_ffmpeg(args: list[str], log_file: Optional[Path] = None) -> tuple[bool, 
     if not output_path:
         # Fallback: last arg if it looks like a path (not a flag)
         last = args[-1]
-        if not last.startswith("-") and "/" in last or "\\" in last or "." in last:
+        if not last.startswith("-") and ("/" in last or "\\" in last or "." in last):
             output_path = Path(last)
 
     if output_path:
@@ -310,7 +325,7 @@ def convert_video(
     log_file: Optional[Path] = None,
 ) -> bool:
     """Convert a single video to Steam spec."""
-    args = build_ffmpeg_args(enc, str(input_file), str(output_file))
+    args = build_ffmpeg_args(enc, str(output_file), input_file=str(input_file))
     success, _ = run_ffmpeg(args, log_file)
     return success
 
@@ -322,7 +337,7 @@ def concat_videos(
     log_file: Optional[Path] = None,
 ) -> bool:
     """Concatenate multiple videos to Steam spec."""
-    args = build_ffmpeg_args(enc, "", str(output_file), playlist=str(playlist_file))
+    args = build_ffmpeg_args(enc, str(output_file), playlist=str(playlist_file))
     success, _ = run_ffmpeg(args, log_file)
     return success
 
@@ -348,17 +363,29 @@ def get_video_duration(filepath: Path) -> str:
 # ─── Config ───────────────────────────────────────────────────────────
 
 def load_config() -> dict:
-    """Load config.json or return default."""
+    """Load config.json or return default. Repairs corrupted entries automatically."""
     if CONFIG_PATH.exists():
         try:
-            return json.loads(CONFIG_PATH.read_text())
+            cfg = json.loads(CONFIG_PATH.read_text())
+            return repair_config(cfg)
         except json.JSONDecodeError:
-            pass
+            backup = CONFIG_PATH.with_suffix(".json.bak")
+            try:
+                shutil.copy2(CONFIG_PATH, backup)
+                console.print(f"[yellow]Warning: config.json is unreadable. Backed up to {backup}. Starting fresh.[/]")
+            except OSError:
+                console.print("[yellow]Warning: config.json is unreadable and could not be backed up. Starting fresh.[/]")
     return {"version": VERSION, "games": {}}
 
 
-def save_config(cfg: dict):
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+def save_config(cfg: dict) -> bool:
+    """Write config.json. Returns True on success, False if write failed."""
+    try:
+        CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+        return True
+    except OSError as e:
+        console.print(f"[red]Failed to save config: {e}[/]")
+        return False
 
 
 def get_rtmp_key(game_name: str) -> str:
@@ -412,7 +439,7 @@ def parse_game_name(filename: str) -> tuple[str, int, bool]:
 
 # ─── Log helpers ──────────────────────────────────────────────────────
 
-def tail_log(log_path: Path, lines: int = 10) -> str:
+def tail_log(log_path: Path, lines: int = LOG_TAIL_LINES) -> str:
     """Return last N lines of a log file."""
     if not log_path.exists():
         return "(no log)"
@@ -442,16 +469,19 @@ except ImportError:
     class _FakeConsole:
         def print(self, *args, **kwargs):
             text = " ".join(str(a) for a in args)
-            # Strip rich markup
-            text = re.sub(r"\[/?\w+\]", "", text)
-            text = re.sub(r"\[dim\].*?\[/\]", "", text)
+            # Suppress dim blocks first (before stripping individual tags)
+            text = re.sub(r"\[dim\].*?\[/\]", "", text, flags=re.DOTALL)
+            # Strip remaining markup tags (handles multi-word styles like [bold magenta])
+            text = re.sub(r"\[/?[^\]]+\]", "", text)
             print(text)
 
         def input(self, prompt="", **kwargs):
             """Styled input fallback — strips markup and passes to builtin."""
             text = str(prompt)
-            text = re.sub(r"\[/?\w+\]", "", text)
-            text = re.sub(r"\[dim\].*?\[/\]", "", text)
+            # Suppress dim blocks first (before stripping individual tags)
+            text = re.sub(r"\[dim\].*?\[/\]", "", text, flags=re.DOTALL)
+            # Strip remaining markup tags (handles multi-word styles like [bold magenta])
+            text = re.sub(r"\[/?[^\]]+\]", "", text)
             return builtins.input(text)
 
         def rule(self, *args, **kwargs):
@@ -463,15 +493,20 @@ except ImportError:
 def banner():
     """Display SteamCast banner."""
     console.print()
-    console.print(
-        Panel.fit(
-            Align.center(
-                f"[bold magenta]STEAMCAST v{VERSION}[/]\n"
-                "[dim]Steam broadcast video prep & cast[/]"
-            ),
-            border_style="magenta",
+    if RICH:
+        console.print(
+            Panel.fit(
+                Align.center(
+                    f"[bold magenta]STEAMCAST v{VERSION}[/]\n"
+                    "[dim]Steam broadcast video prep & cast[/]"
+                ),
+                border_style="magenta",
+            )
         )
-    )
+    else:
+        console.print(f"  STEAMCAST v{VERSION}")
+        console.print("  Steam broadcast video prep & cast")
+        console.print()
 
 
 def show_prep_phase():
@@ -498,7 +533,10 @@ def show_prep_phase():
     console.print('  Multiple videos:  [white]gamename_1.mp4, gamename_2.mp4[/]')
     console.print()
 
-    ready = Confirm.ask("Have you placed all video files in the input folder?")
+    if RICH:
+        ready = Confirm.ask("Have you placed all video files in the input folder?")
+    else:
+        ready = input("Have you placed all video files in the input folder? (y/n): ").lower().startswith("y")
     if not ready:
         console.print("[yellow]Come back when ready![/]")
         return
@@ -546,7 +584,11 @@ def show_prep_phase():
         group_table.add_row(f"[{gname}]", action, exists)
     console.print(group_table)
 
-    if not Confirm.ask("\nProceed with prep?"):
+    if RICH:
+        ok = Confirm.ask("\nProceed with prep?")
+    else:
+        ok = input("\nProceed with prep? (y/n): ").lower().startswith("y")
+    if not ok:
         return
 
     # Step 4: Process each game group
@@ -589,9 +631,9 @@ def show_prep_phase():
             converted = []
             all_ok = True
 
-            for f in files:
+            for idx, f in enumerate(files, 1):
                 temp_out = temp_dir / f"{f.stem}_steam.mp4"
-                part_log = LOG_DIR / f"{safe_name}_part_prep.log"
+                part_log = LOG_DIR / f"{safe_name}_part{idx}_prep.log"
                 console.print(f"\n[dim]Converting {f.name}...[/]")
                 ok = convert_video(f, temp_out, enc, log_file=part_log)
                 if not ok:
@@ -681,7 +723,7 @@ def show_cast_setup():
                 # Guard against non-string keys from corrupted config
                 if not isinstance(key, str):
                     key = ""
-                masked = f"{key[:8]}..." if key else "(no key)"
+                masked = f"{key[:RTMP_KEY_DISPLAY_CHARS]}..." if key else "(no key)"
                 safe_g = sanitize_filename(gname)
                 vid = available_videos.get(safe_g) or available_videos.get(gname)
                 video_status = "✓" if vid else "⚠ no video"
@@ -776,7 +818,7 @@ def show_cast_setup():
                     if not isinstance(key, str):
                         key = ""
                     console.print(f"\n[yellow]Editing: {gname}[/]")
-                    console.print(f"  Current key: [dim]{key[:8]}...[/]" if key else "  [dim]No key set[/]")
+                    console.print(f"  Current key: [dim]{key[:RTMP_KEY_DISPLAY_CHARS]}...[/]" if key else "  [dim]No key set[/]")
 
                     # Edit name
                     if RICH:
@@ -850,10 +892,16 @@ def show_cast():
         console.print("[bold yellow]=== CAST: Select Games ===[/]\n")
 
         menu_items = []
+        cfg_render = load_config()
         for i, gname in enumerate(config_games, 1):
-            is_active = get_game_active(gname)
+            entry = cfg_render["games"].get(gname, {})
+            if isinstance(entry, dict):
+                is_active = entry.get("active", False)
+                has_key = bool(entry.get("rtmp_key", ""))
+            else:
+                is_active = False
+                has_key = False
             has_video = gname.lower() in available_videos
-            has_key = bool(get_rtmp_key(gname))
 
             toggle = "[green]ON[/]" if is_active else "[dim]OFF[/]"
             if has_video:
@@ -884,8 +932,11 @@ def show_cast():
         elif choice == "t":
             any_on = any(m["active"] for m in menu_items)
             new_state = not any_on
+            cfg_toggle = load_config()
             for m in menu_items:
-                set_game_active(m["game"], new_state)
+                if m["game"] in cfg_toggle["games"] and isinstance(cfg_toggle["games"][m["game"]], dict):
+                    cfg_toggle["games"][m["game"]]["active"] = new_state
+            save_config(cfg_toggle)
             console.print(f"[cyan]All games toggled {'ON' if new_state else 'OFF'}[/]")
         elif choice == "a":
             show_cast_setup()
@@ -893,7 +944,11 @@ def show_cast():
             config_games = sorted(cfg["games"].keys())
         elif choice == "p":
             show_prep_phase()
-            return
+            # Refresh video list after Prep may have created new files
+            available_videos = {
+                f.stem.lower(): f for f in OUTPUT_DIR.glob("*.mp4") if f.stat().st_size > 0
+            }
+            continue
         elif choice == "s":
             to_start = [m for m in menu_items if m["active"] and m["has_video"] and m["has_key"]]
             problems = [m for m in menu_items if m["active"] and (not m["has_video"] or not m["has_key"])]
@@ -980,13 +1035,23 @@ def run_cast_stream(games: list[dict]):
             stream_url,
         ]
 
-        log_fh = open(log_file, "w")
-        proc = subprocess.Popen(
-            cmd,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-        )
+        try:
+            log_fh = open(log_file, "w")
+        except OSError as e:
+            console.print(f"[red]Failed to open log file for '{gname}': {e}[/]")
+            continue
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            log_fh.close()
+            console.print(f"[red]Failed to start stream for {gname}: {e}[/]")
+            continue
 
         active_streams[gname] = {
             "pid": proc.pid,
@@ -1123,7 +1188,7 @@ def version_check():
     """Check GitHub for newer version (non-blocking)."""
     try:
         req = urllib.request.Request(VERSION_CHECK_URL)
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=VERSION_CHECK_TIMEOUT) as resp:
             remote = resp.read().decode().strip()
         if remote and remote != VERSION:
             console.print()
