@@ -188,9 +188,9 @@ def download_ffmpeg(console) -> bool:
                     break
             if found:
                 break
-        # Cleanup
+        # Cleanup extracted subdirectories — binary is already at FFMPEG_EXE
         for d in FFMPEG_DIR.iterdir():
-            if d.is_dir() and d.name != "ffmpeg":
+            if d.is_dir():
                 shutil.rmtree(d, ignore_errors=True)
         zip_path.unlink(missing_ok=True)
         FFMPEG_EXE.chmod(0o755)
@@ -683,8 +683,11 @@ def show_prep_phase():
                 playlist_path = temp_dir / "playlist.txt"
                 with open(playlist_path, "w") as pf:
                     for cf in converted:
-                        esc = str(cf).replace("\\", "/").replace("'", "'\\''")
-                        pf.write(f"file '{esc}'\n")
+                        # ffmpeg concat demuxer interprets paths literally — no shell
+                        path_str = str(cf).replace("\\", "/")
+                        if "'" in path_str:
+                            console.print(f"[yellow]Warning: path contains quote, concat may fail: {cf.name}[/]")
+                        pf.write(f"file '{path_str}'\n")
 
                 # Concat
                 concat_log = LOG_DIR / f"{safe_name}_concat.log"
@@ -799,7 +802,7 @@ def show_cast_setup():
             if RICH:
                 key = Prompt.ask(f"[cyan]Enter RTMP key for '{rich_escape(gname)}'[/]", default=current_key)
             else:
-                key = input(f"Enter RTMP key for '{gname}' [{current_key}]: ").strip()
+                key = input(f"Enter RTMP key for '{rich_escape(gname)}' [{current_key}]: ").strip()
             if key:
                 set_rtmp_key(gname, key)
                 console.print(f"[green]✓ Key saved for '{rich_escape(gname)}'[/]")
@@ -826,7 +829,7 @@ def show_cast_setup():
                     if RICH:
                         confirm = Confirm.ask(f"[red]Delete '{rich_escape(gname)}' and its RTMP key?[/]")
                     else:
-                        confirm = input(f"Delete '{gname}'? (y/n): ").lower().startswith("y")
+                        confirm = input(f"Delete '{rich_escape(gname)}'? (y/n): ").lower().startswith("y")
                     if confirm:
                         del cfg["games"][gname]
                         save_config(cfg)
@@ -854,11 +857,14 @@ def show_cast_setup():
                     else:
                         new_name = input("New name (leave empty to keep): ").strip()
                     if new_name and new_name != gname:
-                        # Rename: copy key to new name, delete old
-                        cfg["games"][new_name] = cfg["games"].pop(gname)
-                        save_config(cfg)
-                        console.print(f"[green]✓ Renamed '{rich_escape(gname)}' → '{rich_escape(new_name)}'[/]")
-                        gname = new_name
+                        if new_name in cfg["games"]:
+                            console.print(f"[yellow]'{rich_escape(new_name)}' already exists — rename cancelled.[/]")
+                        else:
+                            # Rename: copy key to new name, delete old
+                            cfg["games"][new_name] = cfg["games"].pop(gname)
+                            save_config(cfg)
+                            console.print(f"[green]✓ Renamed '{rich_escape(gname)}' → '{rich_escape(new_name)}'[/]")
+                            gname = new_name
 
                     # Edit key
                     current_key = get_rtmp_key(gname)
@@ -867,7 +873,7 @@ def show_cast_setup():
                     if RICH:
                         new_key = Prompt.ask(f"[cyan]New RTMP key for '{rich_escape(gname)}'[/]", default=current_key)
                     else:
-                        new_key = input(f"New RTMP key for '{gname}' [{current_key}]: ").strip()
+                        new_key = input(f"New RTMP key for '{rich_escape(gname)}' [{current_key}]: ").strip()
                     if new_key != current_key:
                         set_rtmp_key(gname, new_key)
                         console.print(f"[green]✓ Key updated for '{rich_escape(gname)}'[/]")
@@ -970,6 +976,9 @@ def show_cast():
             show_cast_setup()
             cfg = load_config()
             config_games = sorted(cfg["games"].keys())
+            available_videos = {
+                f.stem.lower(): f for f in OUTPUT_DIR.glob("*.mp4") if f.stat().st_size > 0
+            }
         elif choice == "p":
             show_prep_phase()
             # Refresh video list after Prep may have created new files
@@ -986,9 +995,9 @@ def show_cast():
                 console.print("[yellow]Some active games have issues:[/]")
                 for p in problems:
                     if not p["has_video"]:
-                        console.print(f"  [red]  {p['game']}: no video file (run Prep)[/]")
+                        console.print(f"  [red]  {rich_escape(p['game'])}: no video file (run Prep)[/]")
                     if not p["has_key"]:
-                        console.print(f"  [red]  {p['game']}: no RTMP key (run Setup)[/]")
+                        console.print(f"  [red]  {rich_escape(p['game'])}: no RTMP key (run Setup)[/]")
                 if RICH:
                     ok = Confirm.ask("\nStart anyway (skip problematic games)?")
                 else:
@@ -1015,9 +1024,9 @@ def show_cast():
                     new_state = not item["active"]
                     set_game_active(item["game"], new_state)
                     if not item["has_video"]:
-                        console.print(f"[yellow]'{item['game']}' has no video. Press P to go to Prep.[/]")
+                        console.print(f"[yellow]'{rich_escape(item['game'])}' has no video. Press P to go to Prep.[/]")
                     if not item["has_key"]:
-                        console.print(f"[yellow]'{item['game']}' has no RTMP key. Press A to go to Setup.[/]")
+                        console.print(f"[yellow]'{rich_escape(item['game'])}' has no RTMP key. Press A to go to Setup.[/]")
             except ValueError:
                 pass
 
@@ -1149,7 +1158,7 @@ def run_cast_stream(games: list[dict]):
                     icon = "[red]✗[/]"
                     status = "STOPPED"
                 table.add_row(
-                    f"[bold {row_style}]{gname}[/]",
+                    f"[bold {row_style}]{rich_escape(gname)}[/]",
                     f"[{row_style}]{icon} {status}[/]",
                     f"[dim]({format_duration(elapsed)})[/]",
                     f"[dim]PID {stream['pid']}[/]",
