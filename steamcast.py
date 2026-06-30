@@ -19,13 +19,12 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import traceback
 import uuid
 import zipfile
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -107,7 +106,12 @@ def repair_config(cfg: dict) -> dict:
         del cfg["games"][gname]
 
     if to_delete:
-        save_config(cfg)
+        ok = save_config(cfg)
+        if not ok:
+            # Config couldn't be written — still return cleaned in-memory cfg
+            # to prevent crash, but warn that corruption will return on restart
+            console.print("[yellow]Config corruption detected but could not be saved to disk.[/]")
+            console.print("[dim]The config will be cleaned on next successful save.[/]")
     return cfg
 
 
@@ -125,6 +129,12 @@ def format_duration(seconds: float) -> str:
 
 def format_size(size_bytes: int) -> str:
     return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def rich_escape(text: str) -> str:
+    """Escape [ in user-provided strings to prevent Rich MarkupErrors.
+    Only [ needs escaping — ] is only dangerous as part of unclosed [/]."""
+    return text.replace("[", "\\[")
 
 
 # ─── FFmpeg ───────────────────────────────────────────────────────────
@@ -555,15 +565,22 @@ def show_prep_phase():
         console.input("[dim]Press Enter to continue...[/]") if RICH else input("\nPress Enter to continue...")
         return
 
-    table = Table(title="Found Videos", border_style="green")
-    table.add_column("File", style="white")
-    table.add_column("Duration", style="dim", justify="right")
-    table.add_column("Size", style="dim", justify="right")
-    for f in video_files:
-        dur = get_video_duration(f)
-        size = format_size(f.stat().st_size)
-        table.add_row(f.name, dur, size)
-    console.print(table)
+    if RICH:
+        table = Table(title="Found Videos", border_style="green")
+        table.add_column("File", style="white")
+        table.add_column("Duration", style="dim", justify="right")
+        table.add_column("Size", style="dim", justify="right")
+        for f in video_files:
+            dur = get_video_duration(f)
+            size = format_size(f.stat().st_size)
+            table.add_row(f.name, dur, size)
+        console.print(table)
+    else:
+        console.print("\n[Found Videos]")
+        for f in video_files:
+            dur = get_video_duration(f)
+            size = format_size(f.stat().st_size)
+            console.print(f"  {f.name}  ({dur})  {size}")
 
     # Step 3: Group by game name
     game_groups: dict[str, list[Path]] = {}
@@ -571,18 +588,28 @@ def show_prep_phase():
         game_name, _, _ = parse_game_name(f.name)
         game_groups.setdefault(game_name, []).append(f)
 
-    group_table = Table(title="Grouped by Game", border_style="yellow")
-    group_table.add_column("Game", style="white")
-    group_table.add_column("Action", style="dim")
-    group_table.add_column("Status", style="dim")
-    for gname in sorted(game_groups):
-        files = sorted(game_groups[gname], key=lambda f: f.name)
-        action = f"convert + concat ({len(files)} files)" if len(files) > 1 else "convert only"
-        safe = sanitize_filename(gname)
-        out_path = OUTPUT_DIR / f"{safe}.mp4"
-        exists = "[yellow][EXISTS][/]" if out_path.exists() else ""
-        group_table.add_row(f"[{gname}]", action, exists)
-    console.print(group_table)
+    if RICH:
+        group_table = Table(title="Grouped by Game", border_style="yellow")
+        group_table.add_column("Game", style="white")
+        group_table.add_column("Action", style="dim")
+        group_table.add_column("Status", style="dim")
+        for gname in sorted(game_groups):
+            files = sorted(game_groups[gname], key=lambda f: f.name)
+            action = f"convert + concat ({len(files)} files)" if len(files) > 1 else "convert only"
+            safe = sanitize_filename(gname)
+            out_path = OUTPUT_DIR / f"{safe}.mp4"
+            exists = "[yellow][EXISTS][/]" if out_path.exists() else ""
+            group_table.add_row(f"[{gname}]", action, exists)
+        console.print(group_table)
+    else:
+        console.print("\n[Grouped by Game]")
+        for gname in sorted(game_groups):
+            files = sorted(game_groups[gname], key=lambda f: f.name)
+            action = f"convert + concat ({len(files)} files)" if len(files) > 1 else "convert only"
+            safe = sanitize_filename(gname)
+            out_path = OUTPUT_DIR / f"{safe}.mp4"
+            exists = " [EXISTS]" if out_path.exists() else ""
+            console.print(f"  {gname}: {action}{exists}")
 
     if RICH:
         ok = Confirm.ask("\nProceed with prep?")
@@ -603,20 +630,24 @@ def show_prep_phase():
 
         # Check overwrite
         if out_path.exists():
-            if not Confirm.ask(f'"{gname}.mp4" already exists. Overwrite?'):
-                console.print(f"[dim]Skipping {gname}[/]")
+            if RICH:
+                ok_overwrite = Confirm.ask(f'"{rich_escape(gname)}.mp4" already exists. Overwrite?')
+            else:
+                ok_overwrite = input(f'"{rich_escape(gname)}.mp4" already exists. Overwrite? (y/n): ').lower().startswith("y")
+            if not ok_overwrite:
+                console.print(f"[dim]Skipping {rich_escape(gname)}[/]")
                 continue
 
         if len(files) == 1:
             # Single file — just convert
             prep_log = LOG_DIR / f"{safe_name}_prep.log"
-            console.print(f"\n[dim]Converting {gname}...[/]")
+            console.print(f"\n[dim]Converting {rich_escape(gname)}...[/]")
             ok = convert_video(files[0], out_path, enc, log_file=prep_log)
             if ok:
-                console.print(f"[green]✓ {gname} converted successfully[/]")
+                console.print(f"[green]✓ {rich_escape(gname)} converted successfully[/]")
                 success_count += 1
             else:
-                console.print(f"[red]✗ Failed to convert {gname}[/]")
+                console.print(f"[red]✗ Failed to convert {rich_escape(gname)}[/]")
                 console.print(f"  [dim]Full log: {prep_log}[/]")
                 if prep_log.exists():
                     console.print("  [dim]Last 10 lines:[/]")
@@ -657,14 +688,14 @@ def show_prep_phase():
 
                 # Concat
                 concat_log = LOG_DIR / f"{safe_name}_concat.log"
-                console.print(f"\n[dim]Concatenating {len(converted)} files for {gname}...[/]")
+                console.print(f"\n[dim]Concatenating {len(converted)} files for {rich_escape(gname)}...[/]")
                 ok = concat_videos(playlist_path, out_path, enc, log_file=concat_log)
 
                 if ok:
-                    console.print(f"[green]✓ {gname} ready: {out_path}[/]")
+                    console.print(f"[green]✓ {rich_escape(gname)} ready: {out_path}[/]")
                     success_count += 1
                 else:
-                    console.print(f"[red]✗ Failed to concatenate {gname}[/]")
+                    console.print(f"[red]✗ Failed to concatenate {rich_escape(gname)}[/]")
                     console.print(f"  [dim]Full log: {concat_log}[/]")
                     if concat_log.exists():
                         console.print("  [dim]Last 10 lines:[/]")
@@ -707,34 +738,31 @@ def show_cast_setup():
 
     while True:
         cfg = load_config()
-
-        # Validate config structure — recover from corruption
-        if not isinstance(cfg.get("games"), dict):
-            console.print("[yellow]Config corrupted — resetting games.[/]")
-            cfg["games"] = {}
-            save_config(cfg)
-
         existing = sorted(cfg["games"].keys())
 
         if existing:
             console.print("[yellow]Configured games:[/]")
             for i, gname in enumerate(existing, 1):
-                key = get_rtmp_key(gname)
-                # Guard against non-string keys from corrupted config
+                entry = cfg["games"].get(gname, {})
+                if isinstance(entry, dict):
+                    key = entry.get("rtmp_key", "")
+                else:
+                    key = ""
                 if not isinstance(key, str):
                     key = ""
                 masked = f"{key[:RTMP_KEY_DISPLAY_CHARS]}..." if key else "(no key)"
                 safe_g = sanitize_filename(gname)
                 vid = available_videos.get(safe_g) or available_videos.get(gname)
                 video_status = "✓" if vid else "⚠ no video"
-                console.print(f"  [white][{i}][/] {gname}  [dim]{masked}[/]  {video_status}")
+                console.print(f"  [white][{i}][/] {rich_escape(gname)}  [dim]{masked}[/]  {video_status}")
         else:
             console.print("[dim]No games configured yet.[/]")
 
         if available_videos:
             console.print("\n[yellow]Videos in output folder:[/]")
             for stem, f in available_videos.items():
-                has_key = bool(get_rtmp_key(stem))
+                entry = cfg["games"].get(stem, {})
+                has_key = bool(entry.get("rtmp_key", "")) if isinstance(entry, dict) else False
                 status = "✓ key set" if has_key else "⚠ no key"
                 console.print(f"  [white]{f.name}[/] — {status}")
 
@@ -766,15 +794,15 @@ def show_cast_setup():
 
             current_key = get_rtmp_key(gname)
             if current_key:
-                console.print(f"[yellow]'{gname}' already configured.[/]")
+                console.print(f"[yellow]'{rich_escape(gname)}' already configured.[/]")
 
             if RICH:
-                key = Prompt.ask(f"[cyan]Enter RTMP key for '{gname}'[/]", default=current_key)
+                key = Prompt.ask(f"[cyan]Enter RTMP key for '{rich_escape(gname)}'[/]", default=current_key)
             else:
                 key = input(f"Enter RTMP key for '{gname}' [{current_key}]: ").strip()
             if key:
                 set_rtmp_key(gname, key)
-                console.print(f"[green]✓ Key saved for '{gname}'[/]")
+                console.print(f"[green]✓ Key saved for '{rich_escape(gname)}'[/]")
             else:
                 console.print("[yellow]No key entered — skipped.[/]")
 
@@ -783,7 +811,7 @@ def show_cast_setup():
             console.print()
             console.print("[yellow]Delete which game?[/]")
             for i, gname in enumerate(existing, 1):
-                console.print(f"  [white][{i}][/] {gname}")
+                console.print(f"  [white][{i}][/] {rich_escape(gname)}")
             console.print(f"  [red][X][/] Cancel")
             if RICH:
                 del_choice = Prompt.ask("[red]Enter number to delete[/]", default="x").strip().lower()
@@ -796,13 +824,13 @@ def show_cast_setup():
                 if 0 <= idx < len(existing):
                     gname = existing[idx]
                     if RICH:
-                        confirm = Confirm.ask(f"[red]Delete '{gname}' and its RTMP key?[/]")
+                        confirm = Confirm.ask(f"[red]Delete '{rich_escape(gname)}' and its RTMP key?[/]")
                     else:
                         confirm = input(f"Delete '{gname}'? (y/n): ").lower().startswith("y")
                     if confirm:
                         del cfg["games"][gname]
                         save_config(cfg)
-                        console.print(f"[green]✓ '{gname}' deleted.[/]")
+                        console.print(f"[green]✓ '{rich_escape(gname)}' deleted.[/]")
                 else:
                     console.print("[yellow]Invalid number.[/]")
             except ValueError:
@@ -817,7 +845,7 @@ def show_cast_setup():
                     key = get_rtmp_key(gname)
                     if not isinstance(key, str):
                         key = ""
-                    console.print(f"\n[yellow]Editing: {gname}[/]")
+                    console.print(f"\n[yellow]Editing: {rich_escape(gname)}[/]")
                     console.print(f"  Current key: [dim]{key[:RTMP_KEY_DISPLAY_CHARS]}...[/]" if key else "  [dim]No key set[/]")
 
                     # Edit name
@@ -829,7 +857,7 @@ def show_cast_setup():
                         # Rename: copy key to new name, delete old
                         cfg["games"][new_name] = cfg["games"].pop(gname)
                         save_config(cfg)
-                        console.print(f"[green]✓ Renamed '{gname}' → '{new_name}'[/]")
+                        console.print(f"[green]✓ Renamed '{rich_escape(gname)}' → '{rich_escape(new_name)}'[/]")
                         gname = new_name
 
                     # Edit key
@@ -837,12 +865,12 @@ def show_cast_setup():
                     if not isinstance(current_key, str):
                         current_key = ""
                     if RICH:
-                        new_key = Prompt.ask(f"[cyan]New RTMP key for '{gname}'[/]", default=current_key)
+                        new_key = Prompt.ask(f"[cyan]New RTMP key for '{rich_escape(gname)}'[/]", default=current_key)
                     else:
                         new_key = input(f"New RTMP key for '{gname}' [{current_key}]: ").strip()
                     if new_key != current_key:
                         set_rtmp_key(gname, new_key)
-                        console.print(f"[green]✓ Key updated for '{gname}'[/]")
+                        console.print(f"[green]✓ Key updated for '{rich_escape(gname)}'[/]")
                 else:
                     console.print("[yellow]Invalid number.[/]")
             except ValueError:
@@ -909,7 +937,7 @@ def show_cast():
             else:
                 status = "⚠ no video"
 
-            console.print(f"  [white][{i}][/] {gname}  [{toggle}]  {status}")
+            console.print(f"  [white][{i}][/] {rich_escape(gname)}  [{toggle}]  {status}")
             menu_items.append({
                 "index": i, "game": gname, "active": is_active,
                 "has_video": has_video, "has_key": has_key,
@@ -1013,18 +1041,18 @@ def run_cast_stream(games: list[dict]):
         video_path = OUTPUT_DIR / f"{safe_name}.mp4"
 
         if not video_path.exists():
-            console.print(f"[red]Video not found for '{gname}' — skipping.[/]")
+            console.print(f"[red]Video not found for '{rich_escape(gname)}' — skipping.[/]")
             continue
 
         rtmp_key = get_rtmp_key(gname)
         if not rtmp_key:
-            console.print(f"[red]No RTMP key for '{gname}' — skipping.[/]")
+            console.print(f"[red]No RTMP key for '{rich_escape(gname)}' — skipping.[/]")
             continue
 
         log_file = LOG_DIR / f"{safe_name}_cast.log"
         stream_url = f"{RTMP_INGEST}/{rtmp_key}"
 
-        console.print(f"[dim]Starting stream for {gname}...[/]")
+        console.print(f"[dim]Starting stream for {rich_escape(gname)}...[/]")
 
         cmd = [
             ffmpeg_path,
@@ -1038,7 +1066,7 @@ def run_cast_stream(games: list[dict]):
         try:
             log_fh = open(log_file, "w")
         except OSError as e:
-            console.print(f"[red]Failed to open log file for '{gname}': {e}[/]")
+            console.print(f"[red]Failed to open log file for '{rich_escape(gname)}': {e}[/]")
             continue
 
         try:
@@ -1050,7 +1078,7 @@ def run_cast_stream(games: list[dict]):
             )
         except Exception as e:
             log_fh.close()
-            console.print(f"[red]Failed to start stream for {gname}: {e}[/]")
+            console.print(f"[red]Failed to start stream for {rich_escape(gname)}: {e}[/]")
             continue
 
         active_streams[gname] = {
@@ -1061,7 +1089,7 @@ def run_cast_stream(games: list[dict]):
             "log_fh": log_fh,
             "rtmp_key": rtmp_key,
         }
-        console.print(f"[green]✓ {gname} started (PID {proc.pid})[/]")
+        console.print(f"[green]✓ {rich_escape(gname)} started (PID {proc.pid})[/]")
         time.sleep(1)  # Stagger starts
 
     if not active_streams:
@@ -1073,12 +1101,11 @@ def run_cast_stream(games: list[dict]):
         return
 
     # Monitor loop
-    console.print("\n[bold red]=== 🔴 CASTING — Press Q to stop all ===[/]")
+    console.print("\n[bold red]=== 🔴 CASTING — Press Enter to stop all ===[/]")
 
     if not RICH:
         # Plain text monitor (non-rich)
         from threading import Thread
-        import select
 
         running = True
 
@@ -1155,7 +1182,7 @@ def run_cast_stream(games: list[dict]):
         stream = active_streams[gname]
         proc = stream["process"]
         if proc.poll() is None:
-            console.print(f"[dim]Stopping {gname} (PID {proc.pid})...[/]")
+            console.print(f"[dim]Stopping {rich_escape(gname)} (PID {proc.pid})...[/]")
             proc.terminate()
             try:
                 proc.wait(timeout=5)
@@ -1175,7 +1202,7 @@ def run_cast_stream(games: list[dict]):
                 pass
 
         set_game_active(gname, False)
-        console.print(f"[green]✓ {gname} stopped[/]")
+        console.print(f"[green]✓ {rich_escape(gname)} stopped[/]")
 
     console.print("\n[green]✓ All streams stopped.[/]")
     if RICH:
@@ -1275,13 +1302,10 @@ def main():
         cmd = sys.argv[1].lower()
 
         if cmd == "prep":
-            version_check()
             show_prep_phase()
         elif cmd == "setup":
-            version_check()
             show_cast_setup()
         elif cmd == "cast":
-            version_check()
             show_cast()
         else:
             show_main_menu()
