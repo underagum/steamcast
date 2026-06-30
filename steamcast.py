@@ -76,6 +76,30 @@ VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".webm", ".flv", ".m
 _cached_encoder: Optional[EncoderSettings] = None
 
 
+def repair_config(cfg: dict) -> dict:
+    """Remove obviously corrupted game entries and return cleaned config."""
+    if not isinstance(cfg.get("games"), dict):
+        cfg["games"] = {}
+        return cfg
+
+    to_delete = []
+    for gname, entry in list(cfg["games"].items()):
+        # Delete entries that are not dicts
+        if not isinstance(entry, dict):
+            to_delete.append(gname)
+            continue
+        # Delete entries where the game name IS a Steam RTMP key
+        if gname.startswith("steam_") and len(gname) > 30:
+            to_delete.append(gname)
+
+    for gname in to_delete:
+        del cfg["games"][gname]
+
+    if to_delete:
+        save_config(cfg)
+    return cfg
+
+
 def sanitize_filename(name: str, max_len: int = 80) -> str:
     """Remove path-illegal characters and truncate."""
     safe = re.sub(r'[<>:"/\\|?*]', "_", name)
@@ -672,7 +696,7 @@ def show_cast_setup():
         # Menu
         console.print(f"\n[yellow]{'─' * 40}[/]")
         if existing:
-            console.print("[white][1-{n}][/] Edit game  |  [cyan][A][/] Add new  |  [red][D][/] Delete  |  [dim][Q][/] Done".format(n=len(existing)))
+            console.print("[white]\\[1-{n}\\][/] Edit game  |  [cyan][A][/] Add new  |  [red][D][/] Delete  |  [dim][Q][/] Done".format(n=len(existing)))
         else:
             console.print("[cyan][A][/] Add new game  |  [dim][Q][/] Done")
         console.print()
