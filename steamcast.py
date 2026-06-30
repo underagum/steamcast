@@ -41,7 +41,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 if getattr(sys, 'frozen', False):
     ROOT_DIR = Path(sys.executable).resolve().parent
 else:
@@ -79,7 +79,7 @@ class SteamSpec:
         return f"{self.video_width}x{self.video_height}"
 
 
-FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-8.0.1-essentials_build.zip"
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/underagum/steamcast/main/version.txt"
 RTMP_INGEST = "rtmp://ingest-rtmp.broadcast.steamcontent.com/app"
 SPEC = SteamSpec()
@@ -362,7 +362,7 @@ def download_ffmpeg(console) -> bool:
 
 def detect_encoder(console) -> Optional[EncoderSettings]:
     """Probe ffmpeg for hardware encoders. Results cached.
-    Returns None if the user declines fallback after NVENC driver validation
+    Returns None if the user declines fallback after NVENC validation
     failure — caller should abort Prep."""
     global _cached_encoder
     if _cached_encoder:
@@ -371,6 +371,8 @@ def detect_encoder(console) -> Optional[EncoderSettings]:
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         raise RuntimeError("FFmpeg not found")
+
+    console.print(f"[dim]Probing: {ffmpeg}[/]")
 
     result = subprocess.run(
         [ffmpeg, "-hide_banner", "-encoders"],
@@ -381,16 +383,18 @@ def detect_encoder(console) -> Optional[EncoderSettings]:
     # Priority 1: NVIDIA NVENC
     if "h264_nvenc" in encoders:
         enc = EncoderSettings(codec="h264_nvenc", preset="p7", cbr_flags=["-rc", "cbr"])
-        ok, driver_msg = _validate_encoder(ffmpeg, enc)
+        ok, reason, debug_output = _validate_encoder(ffmpeg, enc)
         if ok:
             console.print("[cyan]NVIDIA NVENC detected — using hardware encoding.[/]")
             _cached_encoder = enc
             return _cached_encoder
         else:
-            console.print(f"[yellow]NVIDIA NVENC found but driver is too old.[/]")
-            if driver_msg:
-                console.print(f"[dim]{driver_msg}[/]")
-            console.print("[dim]Fix: install NVIDIA driver ≥ 610.00 from https://www.nvidia.com/download/[/]")
+            console.print(f"\n[yellow]⚠  NVENC test encode failed.[/]")
+            console.print(f"[dim]Reason: {reason}[/]")
+            if debug_output:
+                console.print(f"[dim]FFmpeg output:[/]")
+                for line in debug_output.strip().splitlines():
+                    console.print(f"[dim]  {line}[/]")
             console.print()
 
             if RICH:
@@ -406,7 +410,8 @@ def detect_encoder(console) -> Optional[EncoderSettings]:
                 _cached_encoder = EncoderSettings(codec="libx264", preset="slow")
                 return _cached_encoder
             else:
-                console.print("[dim]Aborting. Update your NVIDIA driver and try again.[/]")
+                console.print("[dim]Aborting prep.[/]")
+                console.print("[dim]To debug: run the ffmpeg command shown above and check the error.[/]")
                 return None
     # Priority 2: Intel QSV
     if "h264_qsv" in encoders:
@@ -424,13 +429,13 @@ def detect_encoder(console) -> Optional[EncoderSettings]:
     return _cached_encoder
 
 
-def _validate_encoder(ffmpeg: str, enc: EncoderSettings) -> tuple[bool, str]:
+def _validate_encoder(ffmpeg: str, enc: EncoderSettings) -> tuple[bool, str, str]:
     """Run a minimal 1-frame encode to verify the encoder + driver actually work.
-    Returns (ok, diagnostic_message).
-    
-    Only passes -c:v (codec).  Preset / CBR flags are stripped because
-    extreme combinations (e.g. p7 + CBR + 100k) can cause false negatives
-    on perfectly valid driver installations."""
+    Returns (ok, human_reason, full_ffmpeg_output).
+
+    Only passes -c:v (codec).  Preset / CBR / bitrate flags are stripped
+    because extreme combinations (e.g. p7 + CBR + 100k) can cause false
+    negatives on perfectly valid driver installations."""
     cmd = [
         ffmpeg, "-y", "-hide_banner",
         "-f", "lavfi", "-i", "color=c=black:s=32x32:d=0.1",
@@ -445,26 +450,36 @@ def _validate_encoder(ffmpeg: str, enc: EncoderSettings) -> tuple[bool, str]:
         # NVENC driver version mismatch
         m = re.search(r"Driver does not support the required nvenc API version.*", merged)
         if m:
-            return False, m.group(0)
+            return False, m.group(0), merged
         m = re.search(r"minimum required Nvidia driver for nvenc is.*", merged)
         if m:
-            return False, m.group(0)
+            return False, m.group(0), merged
 
-        # Generic "could not open encoder" — usually driver
+        # Generic "could not open encoder"
         if "Could not open encoder" in merged or "Error while opening encoder" in merged:
-            return False, "Encoder failed to initialize (likely driver or GPU issue)."
+            return False, "Encoder failed to initialize.", merged
 
-        # Non-zero exit but no recognizable error pattern — show last error line
+        # Non-zero exit — show last meaningful error line
         if proc.returncode != 0:
-            lines = [l for l in merged.splitlines() if "Error" in l or "error" in l]
-            last = lines[-1] if lines else f"exit code {proc.returncode}"
-            return False, last
+            # Try to find the most specific error
+            for pattern in [
+                r"NVENCCuda.*error",
+                r"nvenc.*fail",
+                r"Cannot (init|load|open|find).*",
+                r"Unknown encoder",
+                r"(Error|error):.*",
+                r"failed.*",
+            ]:
+                m = re.search(pattern, merged, re.IGNORECASE)
+                if m:
+                    return False, m.group(0).strip(), merged
+            return False, f"exit code {proc.returncode}", merged
 
-        return True, ""
+        return True, "", merged
     except subprocess.TimeoutExpired:
-        return False, "Encoder validation timed out."
+        return False, "Encoder validation timed out.", ""
     except Exception as e:
-        return False, str(e)
+        return False, str(e), ""
 
 
 def build_ffmpeg_args(

@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.1.4 — 2026-07-01
+
+### Changed
+
+- **FFmpeg version pinned to 8.0.1.** gyan.dev's generic "latest" URL now serves FFmpeg 8.1.2 (released 2026-06-27), which requires NVENC API version not yet available in driver 610.x. Pinned to 8.0.1 — the last release known to work with driver 610.x. 
+
+### Fixed
+
+- **NVENC validation overhaul.** Test encode failures no longer hardcode "driver too old" as the cause. Actual ffmpeg error output is printed in full, with better error pattern matching. The probed ffmpeg binary path is shown so users can copy-paste the command themselves.
+
 ## v1.1.3 — 2026-07-01
 
 ### Added
