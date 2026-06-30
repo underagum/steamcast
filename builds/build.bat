@@ -14,7 +14,7 @@ if errorlevel 1 (
 )
 
 echo [1/3] Installing dependencies...
-pip install -r requirements.txt pyinstaller
+pip install -r ..\requirements.txt pyinstaller
 if errorlevel 1 (
     echo [ERROR] pip install failed
     pause
@@ -22,7 +22,7 @@ if errorlevel 1 (
 )
 
 echo [2/3] Building steamcast.exe...
-pyinstaller --clean --onefile --name steamcast --console builds/steamcast.spec
+pyinstaller --clean --onefile --name steamcast --console steamcast.spec
 if errorlevel 1 (
     echo [ERROR] PyInstaller build failed
     pause
