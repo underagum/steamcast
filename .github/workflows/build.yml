@@ -26,7 +26,7 @@ jobs:
           pip install rich psutil pyinstaller
 
       - name: Build .exe
-        working-directory: builds
+        working-directory: build
         run: |
           pyinstaller steamcast.spec
 
@@ -34,5 +34,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: steamcast-windows
-          path: builds/dist/steamcast.exe
+          path: build/dist/steamcast.exe
           retention-days: 30

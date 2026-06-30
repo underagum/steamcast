@@ -29,8 +29,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [3/3] Copying to builds/...
-move /Y dist\steamcast.exe builds\steamcast.exe
+echo [3/3] Copying to build/...
+move /Y dist\steamcast.exe build\steamcast.exe
 if errorlevel 1 (
     echo [ERROR] Could not move binary
     pause
@@ -39,7 +39,7 @@ if errorlevel 1 (
 
 echo.
 echo === Build complete ===
-echo    builds\steamcast.exe
+echo    build\steamcast.exe
 echo.
 echo To distribute: send the .exe along with empty input/ and output/ folders.
 echo Users do NOT need Python or Rich installed.

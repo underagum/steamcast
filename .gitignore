@@ -14,12 +14,12 @@ dist/
 build/
 *.spec
 
-# PyInstaller build outputs (spec files in builds/ are tracked)
-builds/steamcast
-builds/steamcast.exe
-builds/build_temp/
-!builds/steamcast.spec
-!builds/build.bat
+# PyInstaller build outputs (spec files in build/ are tracked)
+build/steamcast
+build/steamcast.exe
+build/build_temp/
+!build/steamcast.spec
+!build/build.bat
 
 # OS
 .DS_Store

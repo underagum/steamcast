@@ -156,8 +156,9 @@ steamcast/
 ├── version.txt
 ├── requirements.txt      ← rich, psutil
 ├── .github/workflows/    ← GitHub Actions CI (auto-builds Windows .exe)
-├── builds/
-│   └── steamcast.spec    ← PyInstaller spec for standalone .exe
+├── build/
+│   ├── build.bat          ← Windows build script (double-click to build .exe)
+│   └── steamcast.spec     ← PyInstaller spec for standalone .exe
 ├── input/                ← Drop video files here (gitignored)
 ├── output/               ← Processed .mp4s appear here (gitignored)
 ├── ffmpeg/               ← Auto-downloaded portable FFmpeg (gitignored)
