@@ -151,29 +151,44 @@ def rich_escape(text: str) -> str:
 
 _net_baseline: Optional[int] = None  # bytes_sent from previous sample
 _net_baseline_time: Optional[float] = None
-_cpu_primed: bool = False
+_proc_cache: dict[int, "psutil.Process"] = {}  # pid → Process object, survives refreshes
 
 
-def _prime_cpu():
-    """Call psutil.cpu_percent once to establish a baseline."""
-    global _cpu_primed
-    if _PSUTIL and not _cpu_primed:
-        psutil.cpu_percent(interval=None)
-        _cpu_primed = True
-
-
-def get_system_stats() -> Optional[dict]:
-    """Return CPU %, RAM %, and network TX rate. Returns None if psutil missing."""
+def get_system_stats(pids: Optional[list[int]] = None) -> Optional[dict]:
+    """Return per-process CPU (sum of given PIDs), system RAM%, and network TX rate.
+    Pass ``pids`` to track ffmpeg child processes; omit for system-wide CPU fallback.
+    Returns None if psutil is not installed."""
     if not _PSUTIL:
         return None
 
-    global _net_baseline, _net_baseline_time
+    global _net_baseline, _net_baseline_time, _proc_cache
 
-    _prime_cpu()
-    cpu = psutil.cpu_percent(interval=None)
+    # ── Per-process CPU (sum of tracked PIDs) ──
+    cpu_pct = 0.0
+    if pids:
+        stale = set(_proc_cache) - set(pids)
+        for pid in stale:
+            _proc_cache.pop(pid, None)
+
+        for pid in pids:
+            try:
+                proc = _proc_cache.get(pid)
+                if proc is None:
+                    proc = psutil.Process(pid)
+                    proc.cpu_percent()  # prime
+                    _proc_cache[pid] = proc
+                cpu_pct += proc.cpu_percent()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                _proc_cache.pop(pid, None)
+    else:
+        # Fallback: system-wide (single call, no PID tracking needed)
+        cpu_pct = psutil.cpu_percent(interval=None)
+
+    # ── System RAM ──
     mem = psutil.virtual_memory().percent
-    net = psutil.net_io_counters()
 
+    # ── Network TX rate (delta since last sample) ──
+    net = psutil.net_io_counters()
     now = time.time()
     rate_str = "—"
 
@@ -192,7 +207,7 @@ def get_system_stats() -> Optional[dict]:
     _net_baseline = net.bytes_sent
     _net_baseline_time = now
 
-    return {"cpu": cpu, "mem": mem, "net_tx": rate_str}
+    return {"cpu": cpu_pct, "mem": mem, "net_tx": rate_str}
 
 
 # ─── FFmpeg ───────────────────────────────────────────────────────────
@@ -1195,11 +1210,12 @@ def run_cast_stream(games: list[dict]):
                 color = "\033[32m" if proc.poll() is None else "\033[31m"
                 print(f"\033[K  {color}{gname}  [{status}]  ({format_duration(elapsed)})  PID {stream['pid']}\033[0m")
             # System stats line
-            stats = get_system_stats()
+            pids = [s["process"].pid for s in active_streams.values() if s["process"].poll() is None]
+            stats = get_system_stats(pids) if pids else get_system_stats()
             if stats:
                 cpu_color = "\033[31m" if stats["cpu"] > 80 else "\033[33m" if stats["cpu"] > 50 else "\033[32m"
                 mem_color = "\033[31m" if stats["mem"] > 85 else "\033[33m" if stats["mem"] > 60 else "\033[32m"
-                print(f"\033[K  CPU: {cpu_color}{stats['cpu']:.0f}%\033[0m  RAM: {mem_color}{stats['mem']:.0f}%\033[0m  TX: {stats['net_tx']}")
+                print(f"\033[K  FFmpeg: {cpu_color}{stats['cpu']:.0f}%\033[0m  RAM: {mem_color}{stats['mem']:.0f}%\033[0m  TX: {stats['net_tx']}")
                 lines = len(active_streams) + 1  # streams + stats line
             else:
                 lines = len(active_streams)
@@ -1232,13 +1248,14 @@ def run_cast_stream(games: list[dict]):
                 )
 
             # System stats (if psutil available)
-            stats = get_system_stats()
+            pids = [s["process"].pid for s in active_streams.values() if s["process"].poll() is None]
+            stats = get_system_stats(pids) if pids else get_system_stats()
             if stats:
                 table.add_row("")  # spacer
                 cpu_color = "red" if stats["cpu"] > 80 else "yellow" if stats["cpu"] > 50 else "green"
                 mem_color = "red" if stats["mem"] > 85 else "yellow" if stats["mem"] > 60 else "green"
                 table.add_row(
-                    f"[dim]CPU:[/] [{cpu_color}]{stats['cpu']:.0f}%[/]  "
+                    f"[dim]FFmpeg:[/] [{cpu_color}]{stats['cpu']:.0f}%[/]  "
                     f"[dim]RAM:[/] [{mem_color}]{stats['mem']:.0f}%[/]  "
                     f"[dim]TX:[/] [white]{stats['net_tx']}[/]",
                 )
