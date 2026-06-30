@@ -22,7 +22,7 @@ if errorlevel 1 (
 )
 
 echo [2/3] Building steamcast.exe...
-pyinstaller --clean --onefile --name steamcast --console steamcast.spec
+pyinstaller --clean steamcast.spec
 if errorlevel 1 (
     echo [ERROR] PyInstaller build failed
     pause
