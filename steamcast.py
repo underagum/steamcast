@@ -621,75 +621,159 @@ def show_prep_phase():
 
 
 def show_cast_setup():
-    """Setup: Add/edit RTMP keys."""
+    """Setup: Add, edit, or delete games and RTMP keys."""
     banner()
-    console.print("[bold yellow]=== CAST SETUP: RTMP Key Configuration ===[/]\n")
-    console.print(f"[dim]RTMP keys are stored locally in: {CONFIG_PATH}[/]")
+    console.print("[bold yellow]=== CAST SETUP: Game & Key Configuration ===[/]\n")
+    console.print(f"[dim]All data stored locally in: {CONFIG_PATH}[/]")
     console.print("[dim]No data is sent anywhere — this file stays on your machine.[/]\n")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    available_videos = sorted(OUTPUT_DIR.glob("*.mp4"))
-    cfg = load_config()
+    available_videos = {f.stem: f for f in sorted(OUTPUT_DIR.glob("*.mp4")) if f.stat().st_size > 0}
 
-    # Show configured games
-    existing = list(cfg["games"].keys())
-    if existing:
-        console.print("[yellow]Games already configured:[/]")
-        for g in sorted(existing):
-            key = get_rtmp_key(g)
-            masked = f"{key[:8]}..." if key else "(no key)"
-            safe_g = sanitize_filename(g)
-            has_video = (OUTPUT_DIR / f"{safe_g}.mp4").exists()
-            video_status = "✓" if has_video else "⚠ no video"
-            console.print(f"  [white]{g}[/] [{dim}{masked}[/]] {video_status}")
-    else:
-        console.print("[dim]No games configured yet.[/]")
-
-    if available_videos:
-        console.print("\n[yellow]Available game videos in output folder:[/]")
-        for f in available_videos:
-            gn = f.stem
-            has_key = bool(get_rtmp_key(gn))
-            status = "✓ key set" if has_key else "⚠ no key"
-            console.print(f"  [white]{f.name}[/] — {status}")
-
-    # Setup wizard
-    console.print("\n[yellow]--- Add / Update Keys ---[/]")
     while True:
-        # Show suggestions
-        suggestions = []
-        for f in available_videos:
-            gn = f.stem
-            if not get_rtmp_key(gn):
-                suggestions.append(gn)
-        if suggestions:
-            console.print(f"[yellow]Games needing keys: {', '.join(suggestions)}[/]")
+        cfg = load_config()
+
+        # Validate config structure — recover from corruption
+        if not isinstance(cfg.get("games"), dict):
+            console.print("[yellow]Config corrupted — resetting games.[/]")
+            cfg["games"] = {}
+            save_config(cfg)
+
+        existing = sorted(cfg["games"].keys())
+
+        if existing:
+            console.print("[yellow]Configured games:[/]")
+            for i, gname in enumerate(existing, 1):
+                key = get_rtmp_key(gname)
+                # Guard against non-string keys from corrupted config
+                if not isinstance(key, str):
+                    key = ""
+                masked = f"{key[:8]}..." if key else "(no key)"
+                safe_g = sanitize_filename(gname)
+                vid = available_videos.get(safe_g) or available_videos.get(gname)
+                video_status = "✓" if vid else "⚠ no video"
+                console.print(f"  [white][{i}][/] {gname}  [{dim}{masked}[/]]  {video_status}")
+        else:
+            console.print("[dim]No games configured yet.[/]")
+
+        if available_videos:
+            console.print("\n[yellow]Videos in output folder:[/]")
+            for stem, f in available_videos.items():
+                has_key = bool(get_rtmp_key(stem))
+                status = "✓ key set" if has_key else "⚠ no key"
+                console.print(f"  [white]{f.name}[/] — {status}")
+
+        # Menu
+        console.print(f"\n[yellow]{'─' * 40}[/]")
+        if existing:
+            console.print("[white][1-{n}][/] Edit game  |  [cyan][A][/] Add new  |  [red][D][/] Delete  |  [dim][Q][/] Done".format(n=len(existing)))
+        else:
+            console.print("[cyan][A][/] Add new game  |  [dim][Q][/] Done")
+        console.print()
 
         if RICH:
-            game_name = Prompt.ask("[cyan]Enter game name (or leave empty to finish)[/]", default="")
+            choice = Prompt.ask("[cyan]Select option[/]", default="q").strip().lower()
         else:
-            game_name = input("Enter game name (or leave empty to finish): ").strip()
+            choice = input("Select option: ").strip().lower()
 
-        if not game_name:
+        if choice == "q":
             break
 
-        current_key = get_rtmp_key(game_name)
-        if current_key:
-            console.print(f"[dim]Current key: {current_key[:8]}...[/]")
+        elif choice == "a":
+            # Add new game
             if RICH:
-                change = Confirm.ask("Change it?")
+                gname = Prompt.ask("[cyan]Enter game name[/]", default="").strip()
             else:
-                change = input("Change it? (y/n): ").lower().startswith("y")
-            if not change:
+                gname = input("Enter game name: ").strip()
+            if not gname:
+                console.print("[yellow]Game name cannot be empty.[/]")
                 continue
 
-        if RICH:
-            key = Prompt.ask(f"[cyan]Enter RTMP key for '{game_name}'[/]", default=current_key)
+            current_key = get_rtmp_key(gname)
+            if current_key:
+                console.print(f"[yellow]'{gname}' already configured.[/]")
+
+            if RICH:
+                key = Prompt.ask(f"[cyan]Enter RTMP key for '{gname}'[/]", default=current_key)
+            else:
+                key = input(f"Enter RTMP key for '{gname}' [{current_key}]: ").strip()
+            if key:
+                set_rtmp_key(gname, key)
+                console.print(f"[green]✓ Key saved for '{gname}'[/]")
+            else:
+                console.print("[yellow]No key entered — skipped.[/]")
+
+        elif choice == "d" and existing:
+            # Delete game(s)
+            console.print()
+            console.print("[yellow]Delete which game?[/]")
+            for i, gname in enumerate(existing, 1):
+                console.print(f"  [white][{i}][/] {gname}")
+            console.print(f"  [red][X][/] Cancel")
+            if RICH:
+                del_choice = Prompt.ask("[red]Enter number to delete[/]", default="x").strip().lower()
+            else:
+                del_choice = input("Enter number to delete (x to cancel): ").strip().lower()
+            if del_choice == "x":
+                continue
+            try:
+                idx = int(del_choice) - 1
+                if 0 <= idx < len(existing):
+                    gname = existing[idx]
+                    if RICH:
+                        confirm = Confirm.ask(f"[red]Delete '{gname}' and its RTMP key?[/]")
+                    else:
+                        confirm = input(f"Delete '{gname}'? (y/n): ").lower().startswith("y")
+                    if confirm:
+                        del cfg["games"][gname]
+                        save_config(cfg)
+                        console.print(f"[green]✓ '{gname}' deleted.[/]")
+                else:
+                    console.print("[yellow]Invalid number.[/]")
+            except ValueError:
+                console.print("[yellow]Invalid input.[/]")
+
+        elif choice in "123456789" and existing:
+            # Edit existing game
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(existing):
+                    gname = existing[idx]
+                    key = get_rtmp_key(gname)
+                    if not isinstance(key, str):
+                        key = ""
+                    console.print(f"\n[yellow]Editing: {gname}[/]")
+                    console.print(f"  Current key: [dim]{key[:8]}...[/]" if key else "  [dim]No key set[/]")
+
+                    # Edit name
+                    if RICH:
+                        new_name = Prompt.ask("[cyan]New name (leave empty to keep)[/]", default="").strip()
+                    else:
+                        new_name = input("New name (leave empty to keep): ").strip()
+                    if new_name and new_name != gname:
+                        # Rename: copy key to new name, delete old
+                        cfg["games"][new_name] = cfg["games"].pop(gname)
+                        save_config(cfg)
+                        console.print(f"[green]✓ Renamed '{gname}' → '{new_name}'[/]")
+                        gname = new_name
+
+                    # Edit key
+                    current_key = get_rtmp_key(gname)
+                    if not isinstance(current_key, str):
+                        current_key = ""
+                    if RICH:
+                        new_key = Prompt.ask(f"[cyan]New RTMP key for '{gname}'[/]", default=current_key)
+                    else:
+                        new_key = input(f"New RTMP key for '{gname}' [{current_key}]: ").strip()
+                    if new_key != current_key:
+                        set_rtmp_key(gname, new_key)
+                        console.print(f"[green]✓ Key updated for '{gname}'[/]")
+                else:
+                    console.print("[yellow]Invalid number.[/]")
+            except ValueError:
+                console.print("[yellow]Invalid input.[/]")
         else:
-            key = input(f"Enter RTMP key for '{game_name}' [{current_key}]: ").strip()
-        if key:
-            set_rtmp_key(game_name, key)
-            console.print(f"[green]✓ Key saved for '{game_name}'[/]")
+            continue
 
     console.print("[green]✓ Setup complete.[/]")
     if RICH:
