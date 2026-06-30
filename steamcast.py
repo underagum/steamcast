@@ -425,15 +425,16 @@ def detect_encoder(console) -> Optional[EncoderSettings]:
 
 def _validate_encoder(ffmpeg: str, enc: EncoderSettings) -> tuple[bool, str]:
     """Run a minimal 1-frame encode to verify the encoder + driver actually work.
-    Returns (ok, diagnostic_message)."""
+    Returns (ok, diagnostic_message).
+    
+    Only passes -c:v (codec).  Preset / CBR flags are stripped because
+    extreme combinations (e.g. p7 + CBR + 100k) can cause false negatives
+    on perfectly valid driver installations."""
     cmd = [
         ffmpeg, "-y", "-hide_banner",
         "-f", "lavfi", "-i", "color=c=black:s=32x32:d=0.1",
         "-frames:v", "1",
         "-c:v", enc.codec,
-        "-preset", enc.preset,
-        *enc.cbr_flags,
-        "-b:v", "100k",
         "-f", "null", "-",
     ]
     try:
@@ -899,7 +900,7 @@ def show_prep_phase():
             safe = sanitize_filename(gname)
             out_path = OUTPUT_DIR / f"{safe}.mp4"
             exists = "[yellow][EXISTS][/]" if out_path.exists() else ""
-            group_table.add_row(f"[{gname}]", action, exists)
+            group_table.add_row(rich_escape(f"[{gname}]"), action, exists)
         console.print(group_table)
     else:
         console.print("\n[Grouped by Game]")
