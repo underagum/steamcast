@@ -324,40 +324,46 @@ function Test-HardwareEncoder {
 }
 
 function Get-EncoderSettings {
+    # Return cached result if already probed (saves 3 expensive subprocess calls per game group)
+    if ($Script:CachedEncoder) { return $Script:CachedEncoder }
     # Priority 1: NVIDIA NVENC
     if (Test-HardwareEncoder -EncoderName "h264_nvenc") {
         Show-Info "NVIDIA NVENC detected — using hardware encoding."
-        return @{
+        $Script:CachedEncoder = @{
             codec      = "h264_nvenc"
             preset     = "p7"
             cbr_flags  = "-rc cbr"
         }
+        return $Script:CachedEncoder
     }
     # Priority 2: Intel QSV
     if (Test-HardwareEncoder -EncoderName "h264_qsv") {
         Show-Info "Intel QSV detected — using hardware encoding."
-        return @{
+        $Script:CachedEncoder = @{
             codec      = "h264_qsv"
             preset     = "veryfast"
             cbr_flags  = ""  # QSV: only -b:v -maxrate -bufsize, NO -rc cbr
         }
+        return $Script:CachedEncoder
     }
     # Priority 3: AMD AMF (only available in FULL ffmpeg build, not ESSENTIALS)
     if (Test-HardwareEncoder -EncoderName "h264_amf") {
         Show-Info "AMD AMF detected — using hardware encoding."
-        return @{
+        $Script:CachedEncoder = @{
             codec      = "h264_amf"
             preset     = "quality"
             cbr_flags  = "-rc cbr"
         }
+        return $Script:CachedEncoder
     }
     # Fallback: libx264 software
     Show-Warn "No compatible hardware encoder detected. Using software encoding (libx264) — this will be slower."
-    return @{
+    $Script:CachedEncoder = @{
         codec      = "libx264"
         preset     = "slow"
         cbr_flags  = ""
     }
+    return $Script:CachedEncoder
 }
 
 function Invoke-FFmpegConvert {
@@ -379,7 +385,7 @@ function Invoke-FFmpegConvert {
         "-level:v", $Script:VideoLevel,
         "-b:v", $Script:VideoBitrate,
         "-maxrate", $Script:VideoBitrate,
-        "-bufsize", [math]::Round([int]($Script:VideoBitrate -replace 'k','') * 2).ToString() + "k",
+        "-bufsize", $Script:VideoBitrate,
         "-g", $Script:KeyframeInt,
         "-keyint_min", $Script:KeyframeInt,
         "-sc_threshold", "0",
@@ -387,10 +393,11 @@ function Invoke-FFmpegConvert {
         "-s", "$($Script:VideoWidth)x$($Script:VideoHeight)",
         "-c:a", $Script:AudioCodec,
         "-b:a", $Script:AudioBitrate,
+        "-ar", "44100",
         "-movflags", "+faststart",
         $OutputFile
     )
-    
+
     # Insert encoder-specific CBR flags (after -preset <value>)
     if ($enc.cbr_flags) {
         $ffArgs = $ffArgs[0..6] + @($enc.cbr_flags -split ' ') + $ffArgs[7..($ffArgs.Length-1)]
@@ -431,7 +438,7 @@ function Invoke-FFmpegConcat {
         "-level:v", $Script:VideoLevel,
         "-b:v", $Script:VideoBitrate,
         "-maxrate", $Script:VideoBitrate,
-        "-bufsize", [math]::Round([int]($Script:VideoBitrate -replace 'k','') * 2).ToString() + "k",
+        "-bufsize", $Script:VideoBitrate,
         "-g", $Script:KeyframeInt,
         "-keyint_min", $Script:KeyframeInt,
         "-sc_threshold", "0",
@@ -439,15 +446,16 @@ function Invoke-FFmpegConcat {
         "-s", "$($Script:VideoWidth)x$($Script:VideoHeight)",
         "-c:a", $Script:AudioCodec,
         "-b:a", $Script:AudioBitrate,
+        "-ar", "44100",
         "-movflags", "+faststart",
         $OutputFile
     )
-    
+
     # Insert encoder-specific CBR flags (after -preset <value>)
     if ($enc.cbr_flags) {
-        $ffArgs = $ffArgs[0..6] + @($enc.cbr_flags -split ' ') + $ffArgs[7..($ffArgs.Length-1)]
+        $ffArgs = $ffArgs[0..10] + @($enc.cbr_flags -split ' ') + $ffArgs[11..($ffArgs.Length-1)]
     }
-    
+
     Show-Step "Concatenating..."
     
     if ($ShowOutput) {
@@ -650,10 +658,16 @@ function Invoke-Prep {
                 # Concat
                 Show-Step "Concatenating $($convertedFiles.Count) files for $gName..."
                 $ok = Invoke-FFmpegConcat -PlaylistFile $playlistPath -OutputFile $outPath
+                if (-not $ok) {
+                    # Fallback: corrupted AAC frames in source may cause concat demuxer failure.
+                    # Retry with audio re-encode (forces FFmpeg to error-recover through bad frames).
+                    Show-Warn "Concat failed — retrying with audio re-encode (corrupt AAC workaround)..."
+                    $ok = Invoke-FFmpegConcat -PlaylistFile $playlistPath -OutputFile $outPath -ShowOutput
+                }
                 if ($ok) {
                     Show-Ok "$gName ready: $outPath"
                 } else {
-                    Show-Error "Failed to concatenate $gName"
+                    Show-Error "Failed to concatenate $gName — try re-encoding source files first."
                 }
             }
             
@@ -1000,7 +1014,7 @@ function Invoke-CastStream {
         }
         
         if ($casting) {
-            Start-Sleep -Milliseconds 2000
+            Start-Sleep -Milliseconds 500
         }
     }
     
@@ -1012,9 +1026,12 @@ function Invoke-CastStream {
         if (-not $stream.Process.HasExited) {
             Show-Step "Stopping $gameName (PID $($stream.PID))..."
             $stream.Process.Kill()
+        }
+        # Close log stream before WaitForExit to prevent ObjectDisposedException from async ErrorDataReceived
+        try { $stream.LogStream.Close() } catch {}
+        if (-not $stream.Process.HasExited) {
             $stream.Process.WaitForExit(5000) | Out-Null
         }
-        $stream.LogStream.Close()
         
         # Redact RTMP key from log file
         if ($stream.RTMPKey -and (Test-Path $stream.LogFile)) {
