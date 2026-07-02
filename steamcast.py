@@ -100,7 +100,7 @@ LOG_TAIL_LINES = 10              # lines shown on prep failure
 VERSION_CHECK_TIMEOUT = 5        # seconds timeout for version check HTTP request
 
 # ─── Auto-Reconnect ────────────────────────────────────────────────────
-MAX_RECONNECT_RETRIES = 5        # max reconnection attempts per stream
+MAX_RECONNECT_RETRIES = 0        # 0 = unlimited (retry forever)
 RECONNECT_COOLDOWN_SEC = 10      # seconds between retry attempts
 RECONNECT_DELAY_SEC = 2          # delay before spawning the new process
 
@@ -1221,7 +1221,7 @@ def _attempt_reconnect(
     """
     now = datetime.now()
 
-    if stream["retries"] >= MAX_RECONNECT_RETRIES:
+    if MAX_RECONNECT_RETRIES > 0 and stream["retries"] >= MAX_RECONNECT_RETRIES:
         return False
 
     if stream["last_retry"] is not None:
@@ -1298,12 +1298,17 @@ def _attempt_reconnect(
     stream["last_retry"] = now
 
     _ACTIVE_FFMPEG_PIDS.append(proc.pid)
-    stream["reconnect_msg"] = (
-        f"↻ Reconnected (attempt {stream['retries']}/{MAX_RECONNECT_RETRIES})"
-    )
+    if MAX_RECONNECT_RETRIES > 0:
+        stream["reconnect_msg"] = (
+            f"↻ Reconnected (attempt {stream['retries']}/{MAX_RECONNECT_RETRIES})"
+        )
+    else:
+        stream["reconnect_msg"] = (
+            f"↻ Reconnected (attempt {stream['retries']})"
+        )
     console.print(
         f"[yellow]↻  {rich_escape(gname)} reconnected "
-        f"(attempt {stream['retries']}/{MAX_RECONNECT_RETRIES}, PID {proc.pid})[/]"
+        f"(attempt {stream['retries']}{'/' + str(MAX_RECONNECT_RETRIES) if MAX_RECONNECT_RETRIES > 0 else ''}, PID {proc.pid})[/]"
     )
     return True
 
@@ -1870,10 +1875,10 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                 # Dead-stream reconnect state
                 if proc.poll() is not None:
                     retries = stream.get("retries", 0)
-                    if retries >= MAX_RECONNECT_RETRIES:
+                    if MAX_RECONNECT_RETRIES > 0 and retries >= MAX_RECONNECT_RETRIES:
                         status = f"✗ STOPPED ({retries}/{MAX_RECONNECT_RETRIES})"
                     else:
-                        status = f"✗ DEAD ({retries}/{MAX_RECONNECT_RETRIES})"
+                        status = f"✗ DEAD ({retries}/∞)"
 
                 print(f"\033[K  {color}{gname}  [{status}]  ({format_duration(elapsed)})  PID {stream['pid']}{detail}\033[0m")
 
@@ -1944,12 +1949,12 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                     else:
                         cooldown_remaining = 0
 
-                    if retries >= MAX_RECONNECT_RETRIES:
+                    if MAX_RECONNECT_RETRIES > 0 and retries >= MAX_RECONNECT_RETRIES:
                         status = f"STOPPED ({retries}/{MAX_RECONNECT_RETRIES})"
                     elif cooldown_remaining > 0:
-                        status = f"DEAD · retry in {cooldown_remaining:.0f}s ({retries}/{MAX_RECONNECT_RETRIES})"
+                        status = f"DEAD · retry in {cooldown_remaining:.0f}s ({retries}/∞)"
                     else:
-                        status = f"DEAD · retrying ({retries}/{MAX_RECONNECT_RETRIES})"
+                        status = f"DEAD · retrying ({retries}/∞)"
                     detail = ""
 
                 table.add_row(
