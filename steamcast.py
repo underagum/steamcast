@@ -1593,10 +1593,20 @@ def show_cast():
                 is_active = False
                 has_key = False
             has_video = sanitize_filename(gname) in available_videos
+            has_codec = True
+            codec_msg = ""
+            if has_video:
+                video_path = OUTPUT_DIR / f"{sanitize_filename(gname)}.mp4"
+                has_codec, codec_msg = validate_stream_copy(video_path)
 
             toggle = "[green]ON[/]" if is_active else "[dim]OFF[/]"
             if has_video:
-                status = "✓ ready" if has_key else "⚠ no key"
+                if not has_codec:
+                    status = f"⚠ bad codec — [red]{codec_msg}[/]"
+                elif has_key:
+                    status = "✓ ready"
+                else:
+                    status = "⚠ no key"
             else:
                 status = "⚠ no video"
 
@@ -1604,6 +1614,7 @@ def show_cast():
             menu_items.append({
                 "index": i, "game": gname, "active": is_active,
                 "has_video": has_video, "has_key": has_key,
+                "has_codec": has_codec, "codec_msg": codec_msg,
             })
 
         console.print()
@@ -1645,8 +1656,8 @@ def show_cast():
             }
             continue
         elif choice == "s":
-            to_start = [m for m in menu_items if m["active"] and m["has_video"] and m["has_key"]]
-            problems = [m for m in menu_items if m["active"] and (not m["has_video"] or not m["has_key"])]
+            to_start = [m for m in menu_items if m["active"] and m["has_video"] and m["has_key"] and m["has_codec"]]
+            problems = [m for m in menu_items if m["active"] and (not m["has_video"] or not m["has_key"] or not m["has_codec"])]
 
             if problems:
                 console.print()
@@ -1654,7 +1665,9 @@ def show_cast():
                 for p in problems:
                     if not p["has_video"]:
                         console.print(f"  [red]  {rich_escape(p['game'])}: no video file (run Prep)[/]")
-                    if not p["has_key"]:
+                    elif not p["has_codec"]:
+                        console.print(f"  [red]  {rich_escape(p['game'])}: {p.get('codec_msg', 'bad codec')} (re-encode via Prep)[/]")
+                    elif not p["has_key"]:
                         console.print(f"  [red]  {rich_escape(p['game'])}: no RTMP key (run Setup)[/]")
                 if RICH:
                     ok = Confirm.ask("\nStart anyway (skip problematic games)?")
@@ -1675,8 +1688,8 @@ def show_cast():
             return
         elif choice == "sch":
             # Scheduled broadcast
-            to_start = [m for m in menu_items if m["active"] and m["has_video"] and m["has_key"]]
-            problems = [m for m in menu_items if m["active"] and (not m["has_video"] or not m["has_key"])]
+            to_start = [m for m in menu_items if m["active"] and m["has_video"] and m["has_key"] and m["has_codec"]]
+            problems = [m for m in menu_items if m["active"] and (not m["has_video"] or not m["has_key"] or not m["has_codec"])]
 
             if problems:
                 console.print()
@@ -1684,7 +1697,9 @@ def show_cast():
                 for p in problems:
                     if not p["has_video"]:
                         console.print(f"  [red]  {rich_escape(p['game'])}: no video file (run Prep)[/]")
-                    if not p["has_key"]:
+                    elif not p["has_codec"]:
+                        console.print(f"  [red]  {rich_escape(p['game'])}: {p.get('codec_msg', 'bad codec')} (re-encode via Prep)[/]")
+                    elif not p["has_key"]:
                         console.print(f"  [red]  {rich_escape(p['game'])}: no RTMP key (run Setup)[/]")
                 if RICH:
                     ok = Confirm.ask("\nStart anyway (skip problematic games)?")
@@ -1760,6 +1775,8 @@ def show_cast():
                     set_game_active(item["game"], new_state)
                     if not item["has_video"]:
                         console.print(f"[yellow]'{rich_escape(item['game'])}' has no video. Press P to go to Prep.[/]")
+                    elif not item["has_codec"]:
+                        console.print(f"[red]'{rich_escape(item['game'])}': {item.get('codec_msg', 'bad codec')}. Re-encode via Prep.[/]")
                     if not item["has_key"]:
                         console.print(f"[yellow]'{rich_escape(item['game'])}' has no RTMP key. Press A to go to Setup.[/]")
             except ValueError:
