@@ -12,7 +12,6 @@ Usage:
 """
 
 import atexit
-import builtins
 import json
 import logging
 import os
@@ -42,7 +41,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 if getattr(sys, 'frozen', False):
     ROOT_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1691,12 +1690,12 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
     # Monitor loop
     if duration_hours > 0:
         console.print(
-            f"\\n[bold red]=== 🔴 CASTING — Auto-stop at "
+            f"\n[bold red]=== 🔴 CASTING — Auto-stop at "
             f"{datetime.now() + timedelta(hours=duration_hours):%H:%M:%S} "
             f"(or press Enter) ===[/]"
         )
     else:
-        console.print("\\n[bold red]=== 🔴 CASTING — Press Enter to stop all ===[/]")
+        console.print("\n[bold red]=== 🔴 CASTING — Press Enter to stop all ===[/]")
 
     broadcast_start = datetime.now()
     auto_stop_at = broadcast_start + timedelta(hours=duration_hours) if duration_hours > 0 else None
@@ -1858,6 +1857,7 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
 
     # Stop all streams
     console.print("\n[yellow]=== Stopping all streams ===[/]")
+    _ACTIVE_FFMPEG_PIDS.clear()  # graceful shutdown — atexit killer becomes no-op
     for gname in sorted(active_streams):
         stream = active_streams[gname]
         proc = stream["process"]
