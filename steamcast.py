@@ -79,7 +79,8 @@ class SteamSpec:
         return f"{self.video_width}x{self.video_height}"
 
 
-FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-essentials_build.zip"
+FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+FFMPEG_VER_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.ver"
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/underagum/steamcast/main/version.txt"
 RTMP_INGEST = "rtmp://ingest-rtmp.broadcast.steamcontent.com/app"
 SPEC = SteamSpec()
@@ -269,12 +270,35 @@ def find_ffmpeg() -> Optional[str]:
 
 
 def download_ffmpeg(console) -> bool:
-    """Download portable FFmpeg from gyan.dev. Returns True on success."""
-    console.print("[yellow]FFmpeg not found. Downloading portable build (~55 MB)...[/]")
+    """Download portable FFmpeg from gyan.dev. Returns True on success.
+
+    Flow:
+    1. Fetch .ver file (tiny, ~10 bytes) to discover the actual version
+    2. Display "Latest FFmpeg: vX.Y.Z" so the user knows what they're getting
+    3. Download the zip from the generic /latest URL
+    4. Extract → ffmpeg.exe ready
+    """
     FFMPEG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ── 1. Version discovery (cheap — ~10 bytes over HTTP) ──
+    ffmpeg_ver = None
+    try:
+        with urllib.request.urlopen(FFMPEG_VER_URL, timeout=5) as resp:
+            ffmpeg_ver = resp.read().decode().strip()
+    except Exception:
+        pass  # .ver fetch failed — not fatal, just won't show version
+
+    if ffmpeg_ver:
+        console.print(
+            f"[yellow]FFmpeg not found. Latest available: [bold]v{ffmpeg_ver}[/] "
+            f"(~100 MB). Downloading...[/]"
+        )
+    else:
+        console.print("[yellow]FFmpeg not found. Downloading portable build (~100 MB)...[/]")
 
     zip_path = FFMPEG_DIR / "ffmpeg.zip"
     max_attempts = DOWNLOAD_RETRY_MAX
+    version_label = f" v{ffmpeg_ver}" if ffmpeg_ver else ""
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -290,7 +314,9 @@ def download_ffmpeg(console) -> bool:
                     console=console,
                     transient=True,
                 ) as progress:
-                    task = progress.add_task("Downloading...", total=None)
+                    task = progress.add_task(
+                        f"Downloading{version_label}...", total=None
+                    )
 
                     def reporthook(block_num: int, block_size: int, total_size: int):
                         downloaded = block_num * block_size
