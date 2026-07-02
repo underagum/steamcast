@@ -99,6 +99,11 @@ DOWNLOAD_RETRY_DELAY = 3         # seconds between download retries
 LOG_TAIL_LINES = 10              # lines shown on prep failure
 VERSION_CHECK_TIMEOUT = 5        # seconds timeout for version check HTTP request
 
+# ─── Auto-Reconnect ────────────────────────────────────────────────────
+MAX_RECONNECT_RETRIES = 5        # max reconnection attempts per stream
+RECONNECT_COOLDOWN_SEC = 10      # seconds between retry attempts
+RECONNECT_DELAY_SEC = 2          # delay before spawning the new process
+
 
 def repair_config(cfg: dict) -> dict:
     """Remove obviously corrupted game entries and return cleaned config."""
@@ -1203,6 +1208,106 @@ def show_prep_phase():
         input("\nPress Enter to continue...")
 
 
+def _attempt_reconnect(
+    gname: str,
+    stream: dict,
+    ffmpeg_path: str,
+) -> bool:
+    """Try to restart a dead ffmpeg stream.  Updates ``stream`` in-place
+    and returns True on success, False on permanent failure.
+
+    Enforces retry caps and cooldowns so tight failure loops can't spam
+    the process table.
+    """
+    now = datetime.now()
+
+    if stream["retries"] >= MAX_RECONNECT_RETRIES:
+        return False
+
+    if stream["last_retry"] is not None:
+        cooldown = (now - stream["last_retry"]).total_seconds()
+        if cooldown < RECONNECT_COOLDOWN_SEC:
+            return False  # waiting for cooldown — not permanent yet
+
+    # ── Close the old resources ──
+    old_proc: subprocess.Popen = stream["process"]
+    if old_proc.poll() is None:
+        try:
+            old_proc.terminate()
+            old_proc.wait(timeout=3)
+        except (subprocess.TimeoutExpired, OSError):
+            try:
+                old_proc.kill()
+            except OSError:
+                pass
+
+    try:
+        stream["log_fh"].close()
+    except OSError:
+        pass
+
+    # Remove old PID from atexit guard
+    try:
+        _ACTIVE_FFMPEG_PIDS.remove(old_proc.pid)
+    except ValueError:
+        pass
+
+    # ── Reopen log (append so we don't lose old diagnostics) ──
+    stream_url = f"{RTMP_INGEST}/{stream['rtmp_key']}"
+    video_path = stream["video_path"]
+
+    try:
+        log_fh = open(stream["log_file"], "a")
+    except OSError as e:
+        console.print(f"[red]Reconnect '{rich_escape(gname)}': cannot open log — {e}[/]")
+        stream["retries"] += 1
+        stream["last_retry"] = now
+        return False
+
+    cmd = [
+        ffmpeg_path,
+        "-re", "-y", "-stream_loop", "-1",
+        "-i", str(video_path),
+        "-c", "copy",
+        "-f", "flv",
+        stream_url,
+    ]
+
+    time.sleep(RECONNECT_DELAY_SEC)
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+        )
+    except Exception as e:
+        log_fh.close()
+        console.print(f"[red]Reconnect '{rich_escape(gname)}': spawn failed — {e}[/]")
+        stream["retries"] += 1
+        stream["last_retry"] = now
+        return False
+
+    # ── Success — update stream state ──
+    stream["process"] = proc
+    stream["pid"] = proc.pid
+    stream["start_time"] = now
+    stream["log_fh"] = log_fh
+    stream["retries"] += 1
+    stream["last_retry"] = now
+
+    _ACTIVE_FFMPEG_PIDS.append(proc.pid)
+    stream["reconnect_msg"] = (
+        f"↻ Reconnected (attempt {stream['retries']}/{MAX_RECONNECT_RETRIES})"
+    )
+    console.print(
+        f"[yellow]↻  {rich_escape(gname)} reconnected "
+        f"(attempt {stream['retries']}/{MAX_RECONNECT_RETRIES}, PID {proc.pid})[/]"
+    )
+    return True
+
+
 def show_cast_setup():
     """Setup: Add, edit, or delete games and RTMP keys."""
     banner()
@@ -1675,6 +1780,10 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
             "log_file": log_file,
             "log_fh": log_fh,
             "rtmp_key": rtmp_key,
+            "video_path": video_path,
+            "retries": 0,
+            "last_retry": None,
+            "reconnect_msg": "",
         }
         console.print(f"[green]✓ {rich_escape(gname)} started (PID {proc.pid})[/]")
         time.sleep(1)  # Stagger starts
@@ -1721,6 +1830,13 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                 console.print("\n[yellow]Scheduled stop time reached.[/]")
                 running = False
                 continue
+
+            # ── Auto-reconnect dead streams ──
+            for gname in list(active_streams):
+                stream = active_streams[gname]
+                if stream["process"].poll() is not None:
+                    _attempt_reconnect(gname, stream, ffmpeg_path)
+
             stream_stats = get_per_stream_stats(active_streams) if _PSUTIL else {}
             show_detail = _PSUTIL
             for gname in sorted(active_streams):
@@ -1729,6 +1845,11 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                 elapsed = (datetime.now() - stream["start_time"]).total_seconds()
                 status = "● RUNNING" if proc.poll() is None else "✗ STOPPED"
                 color = "\033[32m" if proc.poll() is None else "\033[31m"
+
+                # Show reconnect message if present
+                if stream.get("reconnect_msg"):
+                    print(f"\033[K  [yellow]{stream['reconnect_msg']}[/]")
+                    stream["reconnect_msg"] = ""
 
                 # Per-stream CPU + bitrate (only if psutil is available)
                 if show_detail and proc.poll() is None:
@@ -1739,6 +1860,14 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                     detail = f"  CPU: {cpu_color}{cpu_val:.0f}%\033[0m  {bitrate_val}"
                 else:
                     detail = ""
+
+                # Dead-stream reconnect state
+                if proc.poll() is not None:
+                    retries = stream.get("retries", 0)
+                    if retries >= MAX_RECONNECT_RETRIES:
+                        status = f"✗ STOPPED ({retries}/{MAX_RECONNECT_RETRIES})"
+                    else:
+                        status = f"✗ DEAD ({retries}/{MAX_RECONNECT_RETRIES})"
 
                 print(f"\033[K  {color}{gname}  [{status}]  ({format_duration(elapsed)})  PID {stream['pid']}{detail}\033[0m")
 
@@ -1798,7 +1927,23 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                 else:
                     row_style = "red"
                     icon = "[red]✗[/]"
-                    status = "STOPPED"
+
+                    # Indicate reconnect progress
+                    retries = stream.get("retries", 0)
+                    last_retry = stream.get("last_retry")
+                    if last_retry is not None:
+                        cooldown_remaining = RECONNECT_COOLDOWN_SEC - (
+                            datetime.now() - last_retry
+                        ).total_seconds()
+                    else:
+                        cooldown_remaining = 0
+
+                    if retries >= MAX_RECONNECT_RETRIES:
+                        status = f"STOPPED ({retries}/{MAX_RECONNECT_RETRIES})"
+                    elif cooldown_remaining > 0:
+                        status = f"DEAD · retry in {cooldown_remaining:.0f}s ({retries}/{MAX_RECONNECT_RETRIES})"
+                    else:
+                        status = f"DEAD · retrying ({retries}/{MAX_RECONNECT_RETRIES})"
                     detail = ""
 
                 table.add_row(
@@ -1850,6 +1995,13 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                         console.print("\n[yellow]Scheduled stop time reached.[/]")
                         running = False
                         continue
+
+                    # ── Auto-reconnect dead streams ──
+                    for gname in list(active_streams):
+                        stream = active_streams[gname]
+                        if stream["process"].poll() is not None:
+                            _attempt_reconnect(gname, stream, ffmpeg_path)
+
                     live.update(generate_table())
                     time.sleep(0.5)
         except KeyboardInterrupt:
