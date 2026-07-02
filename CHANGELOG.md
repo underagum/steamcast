@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.6 — 2026-07-02
+
+### Fixed
+
+- **Active state persistence.** `"active"` in config.json was being force-reset to `false` for every streamed game when a broadcast ended (`run_cast_stream` cleanup loop called `set_game_active(gname, False)`). This meant the user's toggle choices in the CAST menu never survived past one broadcast. The cleanup now leaves `active` state alone — toggle once, stays toggled until you change it.
+
 ## v1.1.5 — 2026-07-02
 
 ### Added

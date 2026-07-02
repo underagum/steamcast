@@ -41,7 +41,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "1.1.5"
+VERSION = "1.1.6"
 if getattr(sys, 'frozen', False):
     ROOT_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1713,7 +1713,10 @@ def run_cast_stream(games: list[dict]):
             except Exception:
                 pass
 
-        set_game_active(gname, False)
+        # Active state is intentionally NOT reset here — the user set it
+        # deliberately in the CAST toggle and expects it to persist across
+        # broadcasts.  If they want everything OFF next time they can use
+        # [T]oggle ALL.
         console.print(f"[green]✓ {rich_escape(gname)} stopped[/]")
 
     console.print("\n[green]✓ All streams stopped.[/]")
