@@ -1,4 +1,4 @@
-# SteamCast v1.2.0
+# SteamCast
 
 > Prepare and broadcast multiple videos to Steam store pages — no OBS, no server setup, no Python required.
 
