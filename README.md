@@ -17,6 +17,30 @@ Two phases:
 
 ---
 
+## How It Works
+
+Every time you launch SteamCast, it runs through a startup sequence designed to be zero-config:
+
+**1. Prerequisites check** — validates Python ≥ 3.9, `rich`, and `psutil` are available. If anything is missing, it prints a clear error with install instructions and exits (before the TUI renders).
+
+**2. FFmpeg auto-detection** — checks for FFmpeg in this order:
+| Priority | Location | When |
+|----------|----------|------|
+| 1 | `ffmpeg/ffmpeg.exe` (bundled, next to the `.exe` or script) | Auto-downloaded on first run |
+| 2 | System PATH (`ffmpeg` command) | User already has FFmpeg installed |
+
+If neither is found, SteamCast auto-downloads a portable FFmpeg build from gyan.dev. Before the download, it fetches a tiny `.ver` file (~10 bytes) to discover the version — so the progress bar shows "Downloading v8.1.2..." instead of a generic label. The `.ver` fetch is non-blocking: if it fails (offline, server error), the download proceeds without showing a version number.
+
+**3. Encoder auto-detection** (PREP only) — probes `ffmpeg -encoders` and picks the best available encoder. NVENC gets special treatment: a 1-frame test encode (256×256 black frame, preset/bitrate flags stripped to avoid false negatives with extreme combinations) verifies the driver actually works. If it fails, the exact FFmpeg error is shown with a diagnostic and a Y/n prompt to fall back to CPU.
+
+**4. Version check** — a background thread pings the GitHub `version.txt` (5s timeout). If a newer release is available, a notification appears in the terminal. Fails silently if offline.
+
+**5. Crash logging** — a global exception hook captures any unhandled crash and writes the full traceback to `logs/steamcast_crash.log`. The terminal also shows the crash with the log path.
+
+**6. Config auto-repair** — on every load, `config.json` is scanned for corruption (non-dict entries, Steam RTMP keys accidentally stored as game names). Damaged entries are silently removed and the config is rewritten. You'll never see a broken config crash.
+
+---
+
 ## Getting SteamCast
 
 You have two options — pick one.
@@ -30,7 +54,7 @@ You have two options — pick one.
 | **Windows 10/11 (64-bit)** | Primary platform |
 | **GPU (optional)** | NVIDIA NVENC (driver ≥ 610.00), Intel QSV, or AMD AMF — auto-detected. Falls back to CPU encoding if none found. |
 | **Steam broadcast key** | From [Steamworks](https://partner.steamgames.com) for each game |
-| **Internet** | First run only — auto-downloads portable FFmpeg (~55 MB). Runs completely offline after that. |
+| **Internet** | First run only — auto-downloads portable FFmpeg (~55 MB). **Skips if FFmpeg is already on your system PATH.** Runs completely offline after download. |
 
 **[Download steamcast.exe](https://github.com/underagum/steamcast/releases/latest)** from the Releases page. Put it in its own folder, double-click, and you're in the main menu. Nothing else to install.
 
@@ -42,11 +66,11 @@ For developers, Linux/macOS users, or anyone who prefers running the script dire
 |-------------|--------|
 | **Python 3.9+** (3.11 recommended) | |
 | **`rich`** | `pip install rich` — colored TUI |
-| **`psutil`** | `pip install psutil` — live system monitoring in CAST dashboard |
+| **`psutil`** | `pip install psutil` — live system monitoring in CAST dashboard (required) |
 | **Windows 10/11, Linux, or macOS** | Windows is primary; Linux/macOS are tested but secondary |
 | **GPU (optional)** | Same as above — NVIDIA NVENC, Intel QSV, AMD AMF, or CPU fallback |
 | **Steam broadcast key** | From [Steamworks](https://partner.steamgames.com) |
-| **FFmpeg** | Auto-downloaded on first run. Internet required once. |
+| **FFmpeg** | Auto-detected and auto-downloaded. Checks bundled `ffmpeg/` first, then system PATH. Downloads portable build (~55 MB) on first run if neither is found. Internet required once. |
 
 ```bash
 git clone https://github.com/underagum/steamcast.git
@@ -55,7 +79,7 @@ pip install rich psutil
 python steamcast.py
 ```
 
-> If `psutil` is not installed, the cast dashboard runs in stream-only mode (no CPU/RAM/GPU stats). The standalone `.exe` bundles everything — no missing dependencies.
+> The standalone `.exe` bundles Python, Rich, and psutil — no missing dependencies, no setup.
 
 ---
 
@@ -126,7 +150,7 @@ GPU: 24%   ENC: 8%    VRAM: 2.3/8.0 GB
 | **ENC** | `nvidia-smi util.encoder` | NVENC ASIC saturation — your real encoding ceiling |
 | **VRAM** | `nvidia-smi mem.used/total` | GPU memory used out of total available |
 
-CPU and bitrate turn yellow at 50% (or above target), red at 85%. GPU/ENC turn yellow at 80% encoder load. Requires `psutil`. Falls back gracefully to a clean stream-only display if `psutil` is not installed.
+CPU and bitrate turn yellow at 50% (or above target), red at 85%. GPU/ENC turn yellow at 80% encoder load.
 
 > **Tip:** If you're running CPU-only (libx264), the GPU/ENC/VRAM row doesn't appear — it's hardware-encoder-only.
 
@@ -138,7 +162,7 @@ SteamCast automatically detects available hardware encoders in priority order �
 
 | Priority | Encoder | Required | Notes |
 |----------|---------|----------|-------|
-| 1 | **NVIDIA NVENC** (`h264_nvenc`) | NVIDIA GPU + **driver ≥ 610.00** | Preset p7, CBR. Validated with a 1-frame test encode. If driver is too old, SteamCast shows a clear diagnostic and asks whether to fall back to CPU. |
+| 1 | **NVIDIA NVENC** (`h264_nvenc`) | NVIDIA GPU + **driver ≥ 610.00** | Preset p7, CBR. Validated with a **1-frame test encode** (256×256 black frame, `-preset p7 -rc cbr` flags stripped to avoid false negatives). If the driver is too old or the GPU lacks NVENC, SteamCast shows the exact FFmpeg error with a diagnostic and asks before falling back to CPU. |
 | 2 | **Intel QSV** (`h264_qsv`) | Intel GPU with Quick Sync | Preset veryfast |
 | 3 | **AMD AMF** (`h264_amf`) | AMD GPU | Only in FFmpeg FULL build; Preset quality, CBR |
 | 4 | **Software fallback** (`libx264`) | CPU only | Slower encode, same quality |
@@ -230,8 +254,9 @@ Every FFmpeg run writes a log to `logs/`:
 | `{Game}_part_prep.log` | Multi-part individual conversions |
 | `{Game}_concat.log` | Concatenation step |
 | `{Game}_cast.log` | Live stream output (RTMP key redacted on stop) |
+| `steamcast_crash.log` | Unhandled exception tracebacks (auto-created on crash) |
 
-On failure, the last 10 lines are shown immediately. Full logs are preserved for debugging.
+On failure, the last 10 lines are shown immediately. Full logs are preserved for debugging. If SteamCast crashes, check `logs/steamcast_crash.log` — it contains the full Python traceback.
 
 ---
 
@@ -259,7 +284,7 @@ If you clone the source, you'll need Python 3.9+ and `pip install rich psutil`.
 Yes — each game gets its own FFmpeg process. Toggle them in the CAST menu.
 
 **Q: Does it show per-game resource usage?**
-Yes. The cast dashboard shows per-stream CPU%, bitrate, GPU encoder load + VRAM (NVENC), system RAM, and total network TX. The standalone `.exe` includes everything out of the box. Python users: `pip install psutil` (gracefully falls back to stream-only display if missing).
+Yes. The cast dashboard shows per-stream CPU%, bitrate, GPU encoder load + VRAM (NVENC), system RAM, and total network TX. The standalone `.exe` includes everything out of the box. Python users need `pip install psutil`.
 
 **Q: Do I need to re-toggle games every time I start a broadcast?**
 No. Your ON/OFF choices in the CAST menu persist in `config.json` and survive across broadcasts and restarts. If you want a clean slate, use `[T]` Toggle ALL to flip everything OFF at once.
