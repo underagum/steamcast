@@ -1652,10 +1652,16 @@ def show_cast():
             dur_h = int(duration_hours)
             dur_m = int((duration_hours - dur_h) * 60)
 
+            # Show date when it spans midnight or crosses a day boundary
+            show_start_date = start_time.date() != datetime.now().date()
+            show_end_date = end_time.date() != start_time.date()
+            start_fmt = start_time.strftime('%d %b %H:%M') if show_start_date else start_time.strftime('%H:%M')
+            end_fmt = end_time.strftime('%d %b %H:%M') if show_end_date else end_time.strftime('%H:%M')
+
             console.print()
             console.print(
-                f"[bold cyan]Broadcast will start at[/] [white]{start_time.strftime('%H:%M')}[/]\n"
-                f"[bold cyan]and run until[/] [white]{end_time.strftime('%H:%M')}[/] "
+                f"[bold cyan]Broadcast will start at[/] [white]{start_fmt}[/]\n"
+                f"[bold cyan]and run until[/] [white]{end_fmt}[/] "
                 f"[dim]({dur_h}h {dur_m}m)[/]"
             )
 
