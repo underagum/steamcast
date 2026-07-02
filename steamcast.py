@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SteamCast — Prepare and broadcast multiple game trailers to Steam store pages.
+SteamCast — Prepare and broadcast multiple videos to Steam store pages.
 Two-phase tool: PREP (convert + concat video files to Steam RTMP spec)
                 CAST (configure RTMP keys, toggle streams on/off, monitor)
 
@@ -11,6 +11,7 @@ Usage:
     python steamcast.py cast     # Jump to stream toggle
 """
 
+import atexit
 import builtins
 import json
 import logging
@@ -25,7 +26,7 @@ import traceback
 import uuid
 import zipfile
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -41,7 +42,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "1.1.6"
+VERSION = "1.2.0"
 if getattr(sys, 'frozen', False):
     ROOT_DIR = Path(sys.executable).resolve().parent
 else:
@@ -159,6 +160,7 @@ _net_baseline: Optional[int] = None  # bytes_sent from previous sample
 _net_baseline_time: Optional[float] = None
 _proc_cache: dict[int, "psutil.Process"] = {}  # pid → Process object, survives refreshes
 _NVIDIA_SMI: Optional[bool] = None  # None=unprobed, True=found, False=not available
+_ACTIVE_FFMPEG_PIDS: list[int] = []  # tracked for atexit cleanup on crash
 
 
 def _read_log_bitrate(log_path: Path) -> str:
@@ -295,19 +297,36 @@ def get_gpu_stats(enc: Optional["EncoderSettings"]) -> Optional[dict]:
 
     _NVIDIA_SMI = True
 
-    parts = result.stdout.strip().split(",")
-    if len(parts) < 4:
-        return None
+    # nvidia-smi returns one CSV line per GPU. On multi-GPU systems,
+    # pick the GPU with the highest encoder utilization — that's the one
+    # actually doing the work. If none have encoder activity, return the
+    # first GPU's stats.
+    lines = result.stdout.strip().splitlines()
+    best = None
+    best_enc = -1
 
-    try:
-        return {
-            "gpu_pct": float(parts[0].strip()),
-            "enc_pct": float(parts[1].strip()),
-            "vram_used": int(parts[2].strip()),
-            "vram_total": int(parts[3].strip()),
-        }
-    except (ValueError, IndexError):
-        return None
+    for line in lines:
+        parts = line.split(",")
+        if len(parts) < 4:
+            continue
+        try:
+            gpu_pct = float(parts[0].strip())
+            enc_pct = float(parts[1].strip())
+            vram_used = int(parts[2].strip())
+            vram_total = int(parts[3].strip())
+        except (ValueError, IndexError):
+            continue
+
+        if enc_pct > best_enc:
+            best_enc = enc_pct
+            best = {
+                "gpu_pct": gpu_pct,
+                "enc_pct": enc_pct,
+                "vram_used": vram_used,
+                "vram_total": vram_total,
+            }
+
+    return best
 
 
 # ─── FFmpeg ───────────────────────────────────────────────────────────
@@ -567,8 +586,10 @@ def build_ffmpeg_args(
     output_file: str,
     input_file: Optional[str] = None,
     playlist: Optional[str] = None,
+    has_audio: bool = True,
 ) -> list[str]:
-    """Build ffmpeg argument list for convert or concat."""
+    """Build ffmpeg argument list for convert or concat.
+    Pass *has_audio=False* to skip audio encoding (for videos with no audio track)."""
     args = ["-y"]
 
     if playlist:
@@ -593,9 +614,16 @@ def build_ffmpeg_args(
         "-r", str(SPEC.video_fps),
         "-s", SPEC.resolution(),
         "-pix_fmt", "yuv420p",
-        "-c:a", SPEC.audio_codec,
-        "-b:a", SPEC.audio_bitrate,
-        "-ar", str(SPEC.audio_sample_rate),
+    ]
+
+    if has_audio:
+        args += [
+            "-c:a", SPEC.audio_codec,
+            "-b:a", SPEC.audio_bitrate,
+            "-ar", str(SPEC.audio_sample_rate),
+        ]
+
+    args += [
         "-movflags", "+faststart",
         output_file,
     ]
@@ -714,9 +742,10 @@ def convert_video(
     enc: EncoderSettings,
     log_file: Optional[Path] = None,
     on_progress: Optional[Callable[[str], None]] = None,
+    has_audio: bool = True,
 ) -> bool:
     """Convert a single video to Steam spec."""
-    args = build_ffmpeg_args(enc, str(output_file), input_file=str(input_file))
+    args = build_ffmpeg_args(enc, str(output_file), input_file=str(input_file), has_audio=has_audio)
     success, _ = run_ffmpeg(args, log_file, on_progress=on_progress)
     return success
 
@@ -727,9 +756,10 @@ def concat_videos(
     enc: EncoderSettings,
     log_file: Optional[Path] = None,
     on_progress: Optional[Callable[[str], None]] = None,
+    has_audio: bool = True,
 ) -> bool:
     """Concatenate multiple videos to Steam spec."""
-    args = build_ffmpeg_args(enc, str(output_file), playlist=str(playlist_file))
+    args = build_ffmpeg_args(enc, str(output_file), playlist=str(playlist_file), has_audio=has_audio)
     success, _ = run_ffmpeg(args, log_file, on_progress=on_progress)
     return success
 
@@ -750,6 +780,22 @@ def get_video_duration(filepath: Path) -> str:
     except Exception:
         pass
     return "??:??:??"
+
+
+def has_audio_stream(filepath: Path) -> bool:
+    """Quick probe: does this file contain an audio stream?"""
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return True  # Assume yes — fail audibly rather than silently skip audio
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-i", str(filepath), "-hide_banner"],
+            capture_output=True, text=True,
+        )
+        # ffmpeg reports streams to stderr. Look for "Audio:" in the output.
+        return "Audio:" in result.stderr
+    except Exception:
+        return True  # Assume yes on probe failure — safer to try and fail clearly
 
 
 # ─── Config ───────────────────────────────────────────────────────────
@@ -1063,8 +1109,9 @@ def show_prep_phase():
         if len(files) == 1:
             # Single file — just convert
             prep_log = LOG_DIR / f"{safe_name}_prep.log"
+            has_audio = has_audio_stream(files[0])
             console.print(f"\n[dim]Converting {rich_escape(gname)}...[/]")
-            ok = convert_video(files[0], out_path, enc, log_file=prep_log, on_progress=_show_progress)
+            ok = convert_video(files[0], out_path, enc, log_file=prep_log, on_progress=_show_progress, has_audio=has_audio)
             # Clear progress line
             print("\r\033[K", end="", flush=True)
             if ok:
@@ -1116,8 +1163,9 @@ def show_prep_phase():
 
                 # Concat
                 concat_log = LOG_DIR / f"{safe_name}_concat.log"
+                has_audio = has_audio_stream(files[0])
                 console.print(f"\n[dim]Concatenating {len(converted)} files for {rich_escape(gname)}...[/]")
-                ok = concat_videos(playlist_path, out_path, enc, log_file=concat_log, on_progress=_show_progress)
+                ok = concat_videos(playlist_path, out_path, enc, log_file=concat_log, on_progress=_show_progress, has_audio=has_audio)
                 # Clear progress line
                 print("\r\033[K", end="", flush=True)
 
@@ -1383,6 +1431,7 @@ def show_cast():
         console.print("[cyan][A][/] Add/Edit keys (Setup)")
         console.print("[cyan][P][/] Go to Prep")
         console.print("[green][S][/] Start broadcasting")
+        console.print("[cyan][SCH][/] Schedule broadcast (start in X min, run for X hours)")
         console.print("[red][Q][/] Back to main menu")
 
         if RICH:
@@ -1444,6 +1493,77 @@ def show_cast():
 
             run_cast_stream(to_start)
             return
+        elif choice == "sch":
+            # Scheduled broadcast
+            to_start = [m for m in menu_items if m["active"] and m["has_video"] and m["has_key"]]
+            problems = [m for m in menu_items if m["active"] and (not m["has_video"] or not m["has_key"])]
+
+            if problems:
+                console.print()
+                console.print("[yellow]Some active games have issues:[/]")
+                for p in problems:
+                    if not p["has_video"]:
+                        console.print(f"  [red]  {rich_escape(p['game'])}: no video file (run Prep)[/]")
+                    if not p["has_key"]:
+                        console.print(f"  [red]  {rich_escape(p['game'])}: no RTMP key (run Setup)[/]")
+                if RICH:
+                    ok = Confirm.ask("\nStart anyway (skip problematic games)?")
+                else:
+                    ok = input("\nStart anyway (y/n): ").lower().startswith("y")
+                if not ok:
+                    continue
+
+            if not to_start:
+                console.print("[yellow]No games ready to broadcast.[/]")
+                if RICH:
+                    console.input("[dim]Press Enter to continue...[/]")
+                else:
+                    input("\nPress Enter to continue...")
+                continue
+
+            # ── Schedule prompts ──
+            console.print()
+            if RICH:
+                delay_str = Prompt.ask("[cyan]Start in how many minutes?[/]", default="30").strip()
+            else:
+                delay_str = input("Start in how many minutes? [30]: ").strip()
+                delay_str = delay_str or "30"
+            try:
+                delay_minutes = max(1, int(delay_str))
+            except ValueError:
+                delay_minutes = 30
+
+            if RICH:
+                dur_str = Prompt.ask("[cyan]Run for how many hours?[/]", default="2").strip()
+            else:
+                dur_str = input("Run for how many hours? [2]: ").strip()
+                dur_str = dur_str or "2"
+            try:
+                duration_hours = max(0.1, float(dur_str))
+            except ValueError:
+                duration_hours = 2
+
+            start_time = datetime.now().replace(microsecond=0) + timedelta(minutes=delay_minutes)
+            end_time = start_time + timedelta(hours=duration_hours)
+            dur_h = int(duration_hours)
+            dur_m = int((duration_hours - dur_h) * 60)
+
+            console.print()
+            console.print(
+                f"[bold cyan]Broadcast will start at[/] [white]{start_time.strftime('%H:%M')}[/]\n"
+                f"[bold cyan]and run until[/] [white]{end_time.strftime('%H:%M')}[/] "
+                f"[dim]({dur_h}h {dur_m}m)[/]"
+            )
+
+            if RICH:
+                confirm = Confirm.ask("\nProceed with scheduled broadcast?")
+            else:
+                confirm = input("\nProceed with scheduled broadcast? (y/n): ").lower().startswith("y")
+            if not confirm:
+                continue
+
+            run_cast_stream(to_start, delay_minutes=delay_minutes, duration_hours=duration_hours)
+            return
         else:
             # Try number input
             try:
@@ -1460,10 +1580,39 @@ def show_cast():
                 pass
 
 
-def run_cast_stream(games: list[dict]):
-    """Start streaming selected games and monitor."""
+def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: float = 0):
+    """Start streaming selected games and monitor.
+
+    If *delay_minutes* > 0, shows a countdown and waits before starting.
+    If *duration_hours* > 0, automatically stops all streams after that
+    many hours (from the time the streams actually start)."""
     banner()
     console.print("[bold red]=== 🔴 STARTING BROADCAST ===[/]\n")
+
+    # ── Scheduling: delay before start ──
+    if delay_minutes > 0:
+        start_at = datetime.now() + timedelta(minutes=delay_minutes)
+        end_at = start_at + timedelta(hours=duration_hours) if duration_hours > 0 else None
+        console.print(
+            f"[cyan]Scheduled:[/] streams will start at [white]{start_at.strftime('%H:%M:%S')}[/]"
+        )
+        if end_at:
+            console.print(
+                f"[cyan]           will auto-stop at [white]{end_at.strftime('%H:%M:%S')}[/] "
+                f"[dim]({int(duration_hours)}h {int((duration_hours % 1) * 60)}m from start)[/]"
+            )
+        console.print()
+
+        remaining = delay_minutes * 60
+        while remaining > 0:
+            m, s = divmod(remaining, 60)
+            if RICH:
+                console.print(f"\r[dim]Starting in {m:02d}:{s:02d}...[/]  ", end="")
+            else:
+                print(f"\rStarting in {m:02d}:{s:02d}...  ", end="", flush=True)
+            time.sleep(1)
+            remaining -= 1
+        console.print("\n[bold green]Starting now![/]\n")
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     active_streams = {}
@@ -1519,6 +1668,7 @@ def run_cast_stream(games: list[dict]):
             console.print(f"[red]Failed to start stream for {rich_escape(gname)}: {e}[/]")
             continue
 
+        _ACTIVE_FFMPEG_PIDS.append(proc.pid)
         active_streams[gname] = {
             "pid": proc.pid,
             "process": proc,
@@ -1539,7 +1689,17 @@ def run_cast_stream(games: list[dict]):
         return
 
     # Monitor loop
-    console.print("\n[bold red]=== 🔴 CASTING — Press Enter to stop all ===[/]")
+    if duration_hours > 0:
+        console.print(
+            f"\\n[bold red]=== 🔴 CASTING — Auto-stop at "
+            f"{datetime.now() + timedelta(hours=duration_hours):%H:%M:%S} "
+            f"(or press Enter) ===[/]"
+        )
+    else:
+        console.print("\\n[bold red]=== 🔴 CASTING — Press Enter to stop all ===[/]")
+
+    broadcast_start = datetime.now()
+    auto_stop_at = broadcast_start + timedelta(hours=duration_hours) if duration_hours > 0 else None
 
     if not RICH:
         # Plain text monitor (non-rich)
@@ -1558,6 +1718,10 @@ def run_cast_stream(games: list[dict]):
         Thread(target=key_listener, daemon=True).start()
 
         while running:
+            if auto_stop_at and datetime.now() >= auto_stop_at:
+                console.print("\n[yellow]Scheduled stop time reached.[/]")
+                running = False
+                continue
             stream_stats = get_per_stream_stats(active_streams) if _PSUTIL else {}
             show_detail = _PSUTIL
             for gname in sorted(active_streams):
@@ -1683,6 +1847,10 @@ def run_cast_stream(games: list[dict]):
         try:
             with Live(generate_table(), refresh_per_second=2, console=console) as live:
                 while running:
+                    if auto_stop_at and datetime.now() >= auto_stop_at:
+                        console.print("\n[yellow]Scheduled stop time reached.[/]")
+                        running = False
+                        continue
                     live.update(generate_table())
                     time.sleep(0.5)
         except KeyboardInterrupt:
@@ -1753,7 +1921,7 @@ def show_main_menu():
     while True:
         banner()
         console.print("  [white][1][/] [bold]Prepare Videos (PREP)[/]")
-        console.print("       [dim]Convert + concatenate game trailers[/]")
+        console.print("       [dim]Convert + concatenate videos[/]")
         console.print()
         console.print("  [white][2][/] [bold]Manage Broadcast (CAST)[/]")
         console.print("       [dim]Set up keys, toggle streams, start/stop[/]")
@@ -1814,6 +1982,18 @@ def setup_crash_logging():
                 pass
 
     sys.excepthook = _crash_handler
+
+    # ── atexit: kill orphaned ffmpeg PIDs on abnormal exit ──
+    def _kill_orphans():
+        if not _ACTIVE_FFMPEG_PIDS:
+            return
+        for pid in _ACTIVE_FFMPEG_PIDS:
+            try:
+                os.kill(pid, 9)  # SIGKILL on POSIX; TerminateProcess on Windows
+            except (OSError, ProcessLookupError):
+                pass  # already dead
+
+    atexit.register(_kill_orphans)
 
 
 def main():

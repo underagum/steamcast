@@ -1,0 +1,21 @@
+# Changelog
+
+## v1.2.0 — 2026-07-02
+
+### Added
+
+- **Broadcast scheduling.** `[SCH]` in the CAST menu lets you set a delayed start ("in X minutes") and an automatic stop ("run for X hours"). Shows calculated start/end times with a confirmation prompt. Countdown timer before launch. Monitor loop auto-stops at the scheduled end time (or when you press Enter).
+- **Timedelta import** (`from datetime import datetime, timedelta`) for schedule calculations.
+- **`[SCH]` menu entry** in CAST alongside `[S]` Start.
+
+### Fixed
+
+- **Silent video PREP failure.** Videos with no audio track (e.g. game footage with music stripped) no longer fail with "matches no streams." `has_audio_stream()` probes the input via `ffmpeg -i` before encoding and conditionally omits `-c:a aac -b:a 128k -ar 44100`. Safe fallback: assumes audio exists if the probe fails.
+- **Multi-GPU nvidia-smi.** `get_gpu_stats()` now processes all GPU rows from `nvidia-smi` and picks the GPU with the highest encoder utilization — so the dashboard shows stats from the GPU actually doing NVENC work. Falls back to first GPU if none have encoder activity.
+- **Orphaned ffmpeg on crash.** `atexit` handler registered in `setup_crash_logging()` kills all tracked ffmpeg PIDs on abnormal exit. PIDs are tracked in `_ACTIVE_FFMPEG_PIDS` when streams launch and cleared on graceful shutdown. No more Task Manager cleanup needed.
+
+### Changed
+
+- **Wording:** "game trailers" → "videos" in docstring and main menu subtitle. SteamCast broadcasts any video, not just trailers.
+- **`build_ffmpeg_args`**, **`convert_video`**, **`concat_videos`** all accept `has_audio: bool = True`.
+
