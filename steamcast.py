@@ -802,6 +802,77 @@ def has_audio_stream(filepath: Path) -> bool:
         return True  # Assume yes on probe failure — safer to try and fail clearly
 
 
+def validate_stream_copy(filepath: Path) -> tuple[bool, str]:
+    """Check that a video is safe to push with ``-c copy`` to RTMP (FLV).
+
+    Returns (ok, message).  ``ok=False`` means the stream will probably
+    fail at Steam's CDN even though ffmpeg will happily push bytes.
+
+    Checks:
+    * Video codec is H.264 (FLV doesn't support HEVC / AV1 / VP9)
+    * Audio codec is AAC — or the file has no audio at all (valid for Steam)
+    """
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return True, "FFmpeg not found — skipping probe"
+
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-i", str(filepath), "-hide_banner"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.TimeoutExpired, Exception):
+        return True, "Probe timed out — will try anyway"
+
+    stderr = result.stderr
+
+    # ── Video codec ──
+    m = re.search(r"Video:\s*(\S+)", stderr)
+    if not m:
+        return False, "No video stream detected"
+    vcodec = m.group(1).lower().rstrip(",")
+    if vcodec not in ("h264", "h.264"):
+        return False, f"Video codec is {vcodec} (FLV requires H.264)"
+
+    # ── Audio codec ──
+    if "Audio:" not in stderr:
+        return True, "No audio stream (allowed)"  # video-only is fine
+
+    m = re.search(r"Audio:\s*(\S+)", stderr)
+    acodec = m.group(1).lower().rstrip(",") if m else "unknown"
+    if acodec not in ("aac", "mp3"):
+        return False, f"Audio codec is {acodec} (FLV requires AAC or MP3)"
+
+    return True, "H.264 + AAC — stream-copy safe"
+
+
+def _read_ffmpeg_error(log_path: Path) -> str:
+    """Return the last meaningful error line from an ffmpeg cast log.
+    Returns empty string if the log is clean or unreadable."""
+    try:
+        with open(log_path, "r", errors="replace") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            if size == 0:
+                return ""
+            f.seek(max(0, size - 4096))
+            tail = f.read()
+    except OSError:
+        return ""
+
+    # Scan backward for the most useful diagnostic
+    for line in reversed(tail.splitlines()):
+        lower = line.lower()
+        if any(kw in lower for kw in (
+            "error", "failed", "refused", "reset", "broken pipe",
+            "connection", "invalid", "unsupported", "unknown",
+            "timeout", "forbidden", "unauthorized", "cannot",
+            "no route", "host", "dns", "network", "aborted",
+        )):
+            return line.strip()
+    return ""
+
+
 # ─── Config ───────────────────────────────────────────────────────────
 
 def load_config() -> dict:
@@ -1756,6 +1827,12 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
 
         console.print(f"[dim]Starting stream for {rich_escape(gname)}...[/]")
 
+        # ── Pre-flight: validate stream-copy compatibility ──
+        probe_ok, probe_msg = validate_stream_copy(video_path)
+        if not probe_ok:
+            console.print(f"[red]⚠  {rich_escape(gname)}: {probe_msg}[/]")
+            console.print("[dim]This stream may silently fail — re-encode it first via PREP.[/]")
+
         cmd = [
             ffmpeg_path,
             "-re", "-y", "-stream_loop", "-1",
@@ -1882,6 +1959,12 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
 
                 print(f"\033[K  {color}{gname}  [{status}]  ({format_duration(elapsed)})  PID {stream['pid']}{detail}\033[0m")
 
+                # Show last ffmpeg error for dead streams
+                if proc.poll() is not None:
+                    err = _read_ffmpeg_error(stream["log_file"])
+                    if err:
+                        print(f"\033[K    \033[31m{err[:120]}\033[0m")
+
             # System RAM + total TX
             sys_stats = get_system_ram_tx()
             if sys_stats:
@@ -1963,6 +2046,15 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                     f"[dim]({format_duration(elapsed)})[/]",
                     f"[dim]PID {stream['pid']}[/]" + detail,
                 )
+
+                # Show last ffmpeg error for dead streams
+                if proc.poll() is not None:
+                    err = _read_ffmpeg_error(stream["log_file"])
+                    if err:
+                        table.add_row(
+                            "", "", "",
+                            f"[red dim]{err[:120]}[/]",
+                        )
 
             # System RAM + total TX (system-wide)
             sys_stats = get_system_ram_tx()
