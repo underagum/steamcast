@@ -1,4 +1,4 @@
-# SteamCast v1.1.6
+# SteamCast v1.2.0
 
 > Prepare and broadcast multiple videos to Steam store pages — no OBS, no server setup, no Python required.
 
@@ -122,9 +122,10 @@ From the main menu, pick **CAST** (option 2) — or run `python steamcast.py cas
 
 - Toggle games ON/OFF by entering their number — **your choices persist** across sessions and broadcasts until you intentionally change them
 - Press `T` to toggle all
-- Press `S` to start broadcasting selected games
+- Press `S` to start broadcasting selected games **immediately**
+- Press `SCH` to **schedule** a broadcast — set a delay ("start in X minutes") and a duration ("run for X hours"). Shows calculated start/end times with a confirmation prompt and countdown
 - While casting: **live per-stream CPU%, bitrate, GPU/encoder load (NVENC), system RAM, and network TX** refresh every 0.5s
-- Press Enter to stop all streams
+- Press Enter to stop all streams early, or let the schedule auto-stop
 
 ---
 
@@ -292,8 +293,11 @@ No. Your ON/OFF choices in the CAST menu persist in `config.json` and survive ac
 **Q: Can I see GPU usage while broadcasting with NVENC?**
 Yes — if you're using NVIDIA NVENC, the cast dashboard shows a dedicated GPU row with total GPU utilisation, NVENC encoder load, and VRAM usage. This row disappears automatically if you're on CPU (libx264) or a non-NVIDIA GPU. Does not require additional setup — just needs `nvidia-smi` on your PATH (included with NVIDIA drivers).
 
-**Q: What if I close the terminal while casting?**
-FFmpeg processes will be orphaned. On Windows, use Task Manager to kill remaining `ffmpeg.exe` processes. (Process group management via the standalone `.exe` is planned.)
+**Q: Can I schedule a broadcast to start and stop automatically?**
+Yes. In the CAST menu, type `SCH` instead of `S`. You'll be prompted for a delay ("start in X minutes") and duration ("run for X hours"). SteamCast shows the calculated start and end times, asks for confirmation, then counts down before launching. The broadcast stops automatically at the scheduled end time — or you can press Enter early.
+
+**Q: What if SteamCast crashes while broadcasting?**
+v1.2.0+ automatically cleans up orphaned ffmpeg processes on crash via an `atexit` handler. If you were on an older version or the cleanup fails, use Task Manager to kill remaining `ffmpeg.exe` processes.
 
 **Q: Do you send my RTMP keys anywhere?**
 No. Everything stays in `config.json` on your machine. Keys are redacted from logs.
