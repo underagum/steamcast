@@ -79,7 +79,7 @@ class SteamSpec:
         return f"{self.video_width}x{self.video_height}"
 
 
-FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-8.0.1-essentials_build.zip"
+FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-essentials_build.zip"
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/underagum/steamcast/main/version.txt"
 RTMP_INGEST = "rtmp://ingest-rtmp.broadcast.steamcontent.com/app"
 SPEC = SteamSpec()
