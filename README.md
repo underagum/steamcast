@@ -1,4 +1,4 @@
-# SteamCast v1.1.0
+# SteamCast v1.1.6
 
 > Prepare and broadcast multiple videos to Steam store pages — no OBS, no server setup.
 
@@ -13,7 +13,7 @@ Two phases:
 | Phase | What |
 |-------|------|
 | **PREP** | Convert your video files to Steam's broadcast spec (H.264, AAC, 1080p30, 7 Mbps CBR, 44100Hz) and concatenate multi-part videos by game. One `.mp4` per game, ready to stream. Progress bars for download and extraction. |
-| **CAST** | Set up RTMP keys, toggle which games to broadcast, and start/stop streams — all from one terminal window. **Live per-stream dashboard** with per-game CPU%, real-time bitrate from FFmpeg output, system RAM, and total network TX rate. |
+| **CAST** | Set up RTMP keys, toggle which games to broadcast, and start/stop streams — all from one terminal window. **Live per-stream dashboard** with per-game CPU%, real-time bitrate from FFmpeg output, GPU encoder load + VRAM (NVENC), system RAM, and total network TX rate. |
 
 ---
 
@@ -80,10 +80,10 @@ Add game names and paste RTMP keys from Steamworks. Keys are stored locally in `
 python steamcast.py cast
 ```
 
-- Toggle games ON/OFF by entering their number
+- Toggle games ON/OFF by entering their number — **your choices persist** across sessions and broadcasts until you intentionally change them
 - Press `T` to toggle all
 - Press `S` to start broadcasting selected games
-- While casting: **live per-stream CPU%, bitrate, system RAM, and network TX** refresh every 0.5s
+- While casting: **live per-stream CPU%, bitrate, GPU/encoder load (NVENC), system RAM, and network TX** refresh every 0.5s
 - Press Enter to stop all streams
 
 ### Or use the main menu
@@ -103,6 +103,7 @@ DreadOut 2          ● RUNNING   (01:23:45)   PID 18492   CPU 12%   7.0M
 DreadOut Remaster   ● RUNNING   (01:23:44)   PID 18501   CPU 8%    6.8M
 
 RAM: 58%   TX: 13.2 MB/s
+GPU: 24%   ENC: 8%    VRAM: 2.3/8.0 GB
 ```
 
 | Column | Source | Meaning |
@@ -111,8 +112,13 @@ RAM: 58%   TX: 13.2 MB/s
 | **Bitrate** (7.0M) | FFmpeg stderr `bitrate=...kbits/s` | Actual encoding output rate being pushed to RTMP |
 | **RAM** | System-wide `psutil` | Total memory pressure |
 | **TX** | System-wide NET I/O delta | Total network send rate (all streams combined) |
+| **GPU** | `nvidia-smi` | Total GPU die utilisation (NVIDIA only; silent on Intel/AMD) |
+| **ENC** | `nvidia-smi util.encoder` | NVENC ASIC saturation — your real encoding ceiling |
+| **VRAM** | `nvidia-smi mem.used/total` | GPU memory used out of total available |
 
-CPU and bitrate turn yellow at 50% (or above target), red at 85%. Requires `psutil`. Falls back gracefully to a clean stream-only display if `psutil` is not installed.
+CPU and bitrate turn yellow at 50% (or above target), red at 85%. GPU/ENC turn yellow at 80% encoder load. Requires `psutil`. Falls back gracefully to a clean stream-only display if `psutil` is not installed.
+
+> **Tip:** If you're running CPU-only (libx264), the GPU/ENC/VRAM row doesn't appear — it's hardware-encoder-only.
 
 ---
 
@@ -233,7 +239,7 @@ On failure, the last 10 lines are shown immediately. Full logs are preserved for
 Yes — each game gets its own FFmpeg process. Toggle them in the CAST menu.
 
 **Q: Does it show per-game resource usage?**
-Yes. The cast dashboard shows per-stream CPU%, bitrate, system RAM, and total network TX. Requires `psutil` (`pip install psutil`).
+Yes. The cast dashboard shows per-stream CPU%, bitrate, GPU encoder load + VRAM (NVENC), system RAM, and total network TX. Requires `psutil` (`pip install psutil`).
 
 **Q: What if I close the terminal while casting?**
 FFmpeg processes will be orphaned. On Windows, use Task Manager to kill remaining `ffmpeg.exe` processes. (Process group management via the standalone `.exe` is planned.)
@@ -252,6 +258,12 @@ SteamCast now validates NVENC with a 1-frame test encode before accepting it. If
 
 **Q: Does it check for updates?**
 On startup, SteamCast performs a quick version check against GitHub. If a newer version is available, it shows a notification. The check times out silently after 5 seconds if you're offline.
+
+**Q: Do I need to re-toggle games every time I start a broadcast?**
+No. Your ON/OFF choices in the CAST menu persist in `config.json` and survive across broadcasts and restarts. If you want a clean slate, use `[T]` Toggle ALL to flip everything OFF at once.
+
+**Q: Can I see GPU usage while broadcasting with NVENC?**
+Yes — if you're using NVIDIA NVENC, the cast dashboard shows a dedicated GPU row with total GPU utilisation, NVENC encoder load, and VRAM usage. This row disappears automatically if you're on CPU (libx264) or a non-NVIDIA GPU. Does not require additional setup — just needs `nvidia-smi` on your PATH (included with NVIDIA drivers).
 
 **Q: Is there a standalone .exe?**
 Yes — every push to `main` triggers a GitHub Actions workflow that builds `steamcast.exe` via PyInstaller. Download it from the [Actions](https://github.com/underagum/steamcast/actions) or [Releases](https://github.com/underagum/steamcast/releases) tab. The `.exe` bundles Python + Rich + psutil; FFmpeg auto-downloads on first run.
