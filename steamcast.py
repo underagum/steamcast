@@ -438,7 +438,7 @@ def _validate_encoder(ffmpeg: str, enc: EncoderSettings) -> tuple[bool, str, str
     negatives on perfectly valid driver installations."""
     cmd = [
         ffmpeg, "-y", "-hide_banner",
-        "-f", "lavfi", "-i", "color=c=black:s=32x32:d=0.1",
+        "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1",
         "-frames:v", "1",
         "-c:v", enc.codec,
         "-f", "null", "-",
