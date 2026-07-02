@@ -1,8 +1,8 @@
 # SteamCast v1.1.6
 
-> Prepare and broadcast multiple videos to Steam store pages — no OBS, no server setup.
+> Prepare and broadcast multiple videos to Steam store pages — no OBS, no server setup, no Python required.
 
-SteamCast is a **Python** tool for game developers and publishers who want to run 24/7 videos on their Steam store pages during sales or events. It replaces OBS with lightweight FFmpeg streaming — near-zero CPU when using hardware encoding.
+SteamCast is a lightweight FFmpeg-based broadcasting tool for game developers and publishers who want to run 24/7 videos on their Steam store pages during sales or events. **Download the `.exe` and run it — that's it.** Near-zero CPU when using hardware encoding (NVENC).
 
 ---
 
@@ -17,38 +17,60 @@ Two phases:
 
 ---
 
-## Requirements
+## Getting SteamCast
 
-- **FFmpeg** — the only hard requirement. SteamCast auto-downloads a portable build (~55 MB) from gyan.dev on first run if not already installed. No manual setup needed — just let the progress bar finish.
-  > This requires an **internet connection** on first launch. After the download, SteamCast runs entirely offline.
-- **Python 3.9+** (3.11 recommended)
-- **Windows 10/11 (64-bit)** — primary target. Linux/macOS work but are secondary.
-- **`rich`** — `pip install rich` (colored TUI; graceful plain-text fallback)
-- **`psutil`** — `pip install psutil` (live system monitoring in CAST dashboard; gracefully skipped if missing)
-- **GPU (optional but recommended):**
-  - **NVIDIA NVENC** — requires **driver ≥ 610.00** (FFmpeg 8.x drops `<610.00` support). SteamCast validates your driver before accepting NVENC — see [GPU Support](#gpu-support) below.
-  - **Intel QSV** — any Intel GPU with Quick Sync
-  - **AMD AMF** — any modern AMD GPU
-  - CPU fallback (`libx264`) if no compatible GPU is found
-- **Steam broadcast key** from [Steamworks](https://partner.steamgames.com) for each game
+You have two options — pick one.
 
----
+### Option A: Standalone .exe (recommended)
 
-## Quick Start
+**No Python, no pip, no setup.** Download the `.exe` and double-click it.
 
-### 1. Clone & install
+| Requirement | Detail |
+|-------------|--------|
+| **Windows 10/11 (64-bit)** | Primary platform |
+| **GPU (optional)** | NVIDIA NVENC (driver ≥ 610.00), Intel QSV, or AMD AMF — auto-detected. Falls back to CPU encoding if none found. |
+| **Steam broadcast key** | From [Steamworks](https://partner.steamgames.com) for each game |
+| **Internet** | First run only — auto-downloads portable FFmpeg (~55 MB). Runs completely offline after that. |
+
+**[Download steamcast.exe](https://github.com/underagum/steamcast/releases/latest)** from the Releases page. Put it in its own folder, double-click, and you're in the main menu. Nothing else to install.
+
+### Option B: Run from source (Python)
+
+For developers, Linux/macOS users, or anyone who prefers running the script directly.
+
+| Requirement | Detail |
+|-------------|--------|
+| **Python 3.9+** (3.11 recommended) | |
+| **`rich`** | `pip install rich` — colored TUI |
+| **`psutil`** | `pip install psutil` — live system monitoring in CAST dashboard |
+| **Windows 10/11, Linux, or macOS** | Windows is primary; Linux/macOS are tested but secondary |
+| **GPU (optional)** | Same as above — NVIDIA NVENC, Intel QSV, AMD AMF, or CPU fallback |
+| **Steam broadcast key** | From [Steamworks](https://partner.steamgames.com) |
+| **FFmpeg** | Auto-downloaded on first run. Internet required once. |
 
 ```bash
 git clone https://github.com/underagum/steamcast.git
 cd steamcast
 pip install rich psutil
+python steamcast.py
 ```
 
-### 2. Prepare videos
+> If `psutil` is not installed, the cast dashboard runs in stream-only mode (no CPU/RAM/GPU stats). The standalone `.exe` bundles everything — no missing dependencies.
 
-```bash
-python steamcast.py prep
-```
+---
+
+## Quick Start
+
+### Step 1: Launch SteamCast
+
+| If you're using... | Do this |
+|--------------------|---------|
+| **Standalone .exe** | Double-click `steamcast.exe`. You'll see the main menu. Jump to **PREP** (option 1). |
+| **Python source** | `python steamcast.py` (or `python steamcast.py prep` to jump straight in) |
+
+First launch auto-downloads FFmpeg (~55 MB, one-time). You'll see a progress bar — let it finish.
+
+### Step 2: Prepare videos
 
 1. Copy your video files into the `input/` folder
 2. Name them like this:
@@ -66,31 +88,19 @@ input/
 3. Follow the prompts — the tool probes your GPU, **validates the driver**, and picks the best encoder
 4. Output goes to `output/` — one `.mp4` per game
 
-### 3. Set up RTMP keys
+### Step 3: Set up RTMP keys
 
-```bash
-python steamcast.py setup
-```
+From the main menu, pick **Setup** (option 3) — or run `python steamcast.py setup`. Add game names and paste RTMP keys from Steamworks. Keys are stored locally in `config.json`. **No data leaves your machine.**
 
-Add game names and paste RTMP keys from Steamworks. Keys are stored locally in `config.json`. **No data leaves your machine.**
+### Step 4: Cast
 
-### 4. Cast
-
-```bash
-python steamcast.py cast
-```
+From the main menu, pick **CAST** (option 2) — or run `python steamcast.py cast`.
 
 - Toggle games ON/OFF by entering their number — **your choices persist** across sessions and broadcasts until you intentionally change them
 - Press `T` to toggle all
 - Press `S` to start broadcasting selected games
 - While casting: **live per-stream CPU%, bitrate, GPU/encoder load (NVENC), system RAM, and network TX** refresh every 0.5s
 - Press Enter to stop all streams
-
-### Or use the main menu
-
-```bash
-python steamcast.py
-```
 
 ---
 
@@ -154,6 +164,10 @@ Fall back to CPU encoding (libx264)? [Y/n]
 
 ## Folder Structure
 
+**Standalone .exe users:** Just put `steamcast.exe` in its own folder. The `input/`, `output/`, `ffmpeg/`, `logs/` directories and `config.json` are auto-created next to the `.exe` on first run.
+
+**Python source:**
+
 ```
 steamcast/
 ├── steamcast.py          ← Main script (cross-platform)
@@ -164,7 +178,8 @@ steamcast/
 ├── .github/workflows/    ← GitHub Actions CI (auto-builds Windows .exe)
 ├── build/
 │   ├── build.bat          ← Windows build script (double-click to build .exe)
-│   └── steamcast.spec     ← PyInstaller spec for standalone .exe
+│   ├── steamcast.spec     ← PyInstaller spec for standalone .exe
+│   └── steamcast.exe      ← Pre-built binary (GitHub Release download)
 ├── input/                ← Drop video files here (gitignored)
 ├── output/               ← Processed .mp4s appear here (gitignored)
 ├── ffmpeg/               ← Auto-downloaded portable FFmpeg (gitignored)
@@ -178,12 +193,12 @@ steamcast/
 
 ## CLI Usage
 
-```bash
-python steamcast.py prep       # Jump straight to Prep
-python steamcast.py setup      # Jump straight to key setup
-python steamcast.py cast       # Jump straight to stream toggle
-python steamcast.py            # Show main menu (default)
-```
+| Action | Standalone .exe | Python source |
+|--------|----------------|---------------|
+| Main menu | Double-click `steamcast.exe` | `python steamcast.py` |
+| Jump to Prep | `steamcast.exe prep` | `python steamcast.py prep` |
+| Jump to Setup | `steamcast.exe setup` | `python steamcast.py setup` |
+| Jump to Cast | `steamcast.exe cast` | `python steamcast.py cast` |
 
 ---
 
@@ -235,11 +250,22 @@ On failure, the last 10 lines are shown immediately. Full logs are preserved for
 
 ## FAQ
 
+**Q: Do I need Python?**
+No — if you download the standalone `.exe` from [Releases](https://github.com/underagum/steamcast/releases/latest). It bundles Python, Rich, and psutil into a single 11 MB file. FFmpeg auto-downloads on first run. Double-click and go.
+
+If you clone the source, you'll need Python 3.9+ and `pip install rich psutil`.
+
 **Q: Can I broadcast multiple games at once?**
 Yes — each game gets its own FFmpeg process. Toggle them in the CAST menu.
 
 **Q: Does it show per-game resource usage?**
-Yes. The cast dashboard shows per-stream CPU%, bitrate, GPU encoder load + VRAM (NVENC), system RAM, and total network TX. Requires `psutil` (`pip install psutil`).
+Yes. The cast dashboard shows per-stream CPU%, bitrate, GPU encoder load + VRAM (NVENC), system RAM, and total network TX. The standalone `.exe` includes everything out of the box. Python users: `pip install psutil` (gracefully falls back to stream-only display if missing).
+
+**Q: Do I need to re-toggle games every time I start a broadcast?**
+No. Your ON/OFF choices in the CAST menu persist in `config.json` and survive across broadcasts and restarts. If you want a clean slate, use `[T]` Toggle ALL to flip everything OFF at once.
+
+**Q: Can I see GPU usage while broadcasting with NVENC?**
+Yes — if you're using NVIDIA NVENC, the cast dashboard shows a dedicated GPU row with total GPU utilisation, NVENC encoder load, and VRAM usage. This row disappears automatically if you're on CPU (libx264) or a non-NVIDIA GPU. Does not require additional setup — just needs `nvidia-smi` on your PATH (included with NVIDIA drivers).
 
 **Q: What if I close the terminal while casting?**
 FFmpeg processes will be orphaned. On Windows, use Task Manager to kill remaining `ffmpeg.exe` processes. (Process group management via the standalone `.exe` is planned.)
@@ -258,15 +284,6 @@ SteamCast now validates NVENC with a 1-frame test encode before accepting it. If
 
 **Q: Does it check for updates?**
 On startup, SteamCast performs a quick version check against GitHub. If a newer version is available, it shows a notification. The check times out silently after 5 seconds if you're offline.
-
-**Q: Do I need to re-toggle games every time I start a broadcast?**
-No. Your ON/OFF choices in the CAST menu persist in `config.json` and survive across broadcasts and restarts. If you want a clean slate, use `[T]` Toggle ALL to flip everything OFF at once.
-
-**Q: Can I see GPU usage while broadcasting with NVENC?**
-Yes — if you're using NVIDIA NVENC, the cast dashboard shows a dedicated GPU row with total GPU utilisation, NVENC encoder load, and VRAM usage. This row disappears automatically if you're on CPU (libx264) or a non-NVIDIA GPU. Does not require additional setup — just needs `nvidia-smi` on your PATH (included with NVIDIA drivers).
-
-**Q: Is there a standalone .exe?**
-Yes — every push to `main` triggers a GitHub Actions workflow that builds `steamcast.exe` via PyInstaller. Download it from the [Actions](https://github.com/underagum/steamcast/actions) or [Releases](https://github.com/underagum/steamcast/releases) tab. The `.exe` bundles Python + Rich + psutil; FFmpeg auto-downloads on first run.
 
 ---
 
