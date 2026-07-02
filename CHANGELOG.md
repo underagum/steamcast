@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.5 — 2026-07-02
+
+### Added
+
+- **GPU monitoring in CAST dashboard.** When using a hardware encoder (NVENC/QSV/AMF), the live broadcast monitor now shows GPU utilisation, NVENC encoder load, and VRAM usage. Uses `nvidia-smi` for NVIDIA — Intel QSV and AMD AMF return no GPU row for now (probe infrastructure is ready). Gracefully degrades if `nvidia-smi` is not on PATH.
+- **`EncoderSettings.is_hardware`** — dataclass field so downstream code can check whether the active encoder is GPU-accelerated without string-parsing the codec name.
+
 ## v1.1.4 — 2026-07-01
 
 ### Changed

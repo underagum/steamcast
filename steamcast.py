@@ -41,7 +41,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "1.1.4"
+VERSION = "1.1.5"
 if getattr(sys, 'frozen', False):
     ROOT_DIR = Path(sys.executable).resolve().parent
 else:
@@ -60,6 +60,7 @@ class EncoderSettings:
     codec: str
     preset: str
     cbr_flags: list[str] = field(default_factory=list)
+    is_hardware: bool = False
 
 
 @dataclass
@@ -157,6 +158,7 @@ def rich_escape(text: str) -> str:
 _net_baseline: Optional[int] = None  # bytes_sent from previous sample
 _net_baseline_time: Optional[float] = None
 _proc_cache: dict[int, "psutil.Process"] = {}  # pid → Process object, survives refreshes
+_NVIDIA_SMI: Optional[bool] = None  # None=unprobed, True=found, False=not available
 
 
 def _read_log_bitrate(log_path: Path) -> str:
@@ -254,6 +256,58 @@ def get_system_ram_tx() -> Optional[dict]:
     _net_baseline_time = now
 
     return {"mem": mem, "net_tx": rate_str}
+
+
+def get_gpu_stats(enc: Optional["EncoderSettings"]) -> Optional[dict]:
+    """Return GPU encoder utilisation and VRAM. Only works for NVENC (nvidia-smi).
+    Returns None if not a hardware encoder, nvidia-smi is unavailable, or query fails.
+    Probes once — failures are cached for the session."""
+    global _NVIDIA_SMI
+
+    if enc is None or not enc.is_hardware:
+        return None
+
+    # Only NVIDIA for now — QSV/AMF monitoring can be added later
+    if "nvenc" not in enc.codec:
+        return None
+
+    if _NVIDIA_SMI is False:
+        return None
+
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu,utilization.encoder,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        _NVIDIA_SMI = False
+        return None
+
+    if result.returncode != 0 or not result.stdout.strip():
+        _NVIDIA_SMI = False
+        return None
+
+    _NVIDIA_SMI = True
+
+    parts = result.stdout.strip().split(",")
+    if len(parts) < 4:
+        return None
+
+    try:
+        return {
+            "gpu_pct": float(parts[0].strip()),
+            "enc_pct": float(parts[1].strip()),
+            "vram_used": int(parts[2].strip()),
+            "vram_total": int(parts[3].strip()),
+        }
+    except (ValueError, IndexError):
+        return None
 
 
 # ─── FFmpeg ───────────────────────────────────────────────────────────
@@ -408,7 +462,7 @@ def detect_encoder(console) -> Optional[EncoderSettings]:
 
     # Priority 1: NVIDIA NVENC
     if "h264_nvenc" in encoders:
-        enc = EncoderSettings(codec="h264_nvenc", preset="p7", cbr_flags=["-rc", "cbr"])
+        enc = EncoderSettings(codec="h264_nvenc", preset="p7", cbr_flags=["-rc", "cbr"], is_hardware=True)
         ok, reason, debug_output = _validate_encoder(ffmpeg, enc)
         if ok:
             console.print("[cyan]NVIDIA NVENC detected — using hardware encoding.[/]")
@@ -442,12 +496,12 @@ def detect_encoder(console) -> Optional[EncoderSettings]:
     # Priority 2: Intel QSV
     if "h264_qsv" in encoders:
         console.print("[cyan]Intel QSV detected — using hardware encoding.[/]")
-        _cached_encoder = EncoderSettings(codec="h264_qsv", preset="veryfast")
+        _cached_encoder = EncoderSettings(codec="h264_qsv", preset="veryfast", is_hardware=True)
         return _cached_encoder
     # Priority 3: AMD AMF
     if "h264_amf" in encoders:
         console.print("[cyan]AMD AMF detected — using hardware encoding.[/]")
-        _cached_encoder = EncoderSettings(codec="h264_amf", preset="quality", cbr_flags=["-rc", "cbr"])
+        _cached_encoder = EncoderSettings(codec="h264_amf", preset="quality", cbr_flags=["-rc", "cbr"], is_hardware=True)
         return _cached_encoder
     # Fallback
     console.print("[yellow]No hardware encoder. Using libx264 (slower).[/]")
@@ -1533,6 +1587,18 @@ def run_cast_stream(games: list[dict]):
                 lines = len(active_streams) + 1
             else:
                 lines = len(active_streams)
+
+            # GPU stats (NVENC only via nvidia-smi)
+            gpu = get_gpu_stats(_cached_encoder)
+            if gpu:
+                enc_color = "\033[33m" if gpu["enc_pct"] > 80 else "\033[32m"
+                gpu_color = "\033[33m" if gpu["gpu_pct"] > 80 else "\033[32m"
+                print(
+                    f"\033[K  GPU: {gpu_color}{gpu['gpu_pct']:.0f}%\033[0m  "
+                    f"ENC: {enc_color}{gpu['enc_pct']:.0f}%\033[0m  "
+                    f"VRAM: {gpu['vram_used'] / 1024:.1f}/{gpu['vram_total'] / 1024:.1f} GB"
+                )
+                lines += 1
             print(f"\033[{lines}A", end="")
             time.sleep(2)
         print("\n")
@@ -1587,6 +1653,17 @@ def run_cast_stream(games: list[dict]):
                 table.add_row(
                     f"[dim]RAM:[/] [{mem_color}]{sys_stats['mem']:.0f}%[/]  "
                     f"[dim]TX:[/] [white]{sys_stats['net_tx']}[/]",
+                )
+
+            # GPU stats (NVENC / QSV / AMF)
+            gpu = get_gpu_stats(_cached_encoder)
+            if gpu:
+                enc_color = "yellow" if gpu["enc_pct"] > 80 else "green"
+                gpu_color = "yellow" if gpu["gpu_pct"] > 80 else "green"
+                table.add_row(
+                    f"[dim]GPU:[/] [{gpu_color}]{gpu['gpu_pct']:.0f}%[/]  "
+                    f"[dim]ENC:[/] [{enc_color}]{gpu['enc_pct']:.0f}%[/]  "
+                    f"[dim]VRAM:[/] [white]{gpu['vram_used'] / 1024:.1f}/{gpu['vram_total'] / 1024:.1f} GB[/]",
                 )
 
             return table
