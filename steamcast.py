@@ -1191,8 +1191,8 @@ def show_prep_phase():
             # Cleanup temp
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    if cancelled:
-        break
+        if cancelled:
+            break
 
     # Report
     console.print(f"\n[bold green]=== Prep Complete ===[/]")
