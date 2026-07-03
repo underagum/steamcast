@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.2.2 — 2026-07-02
+
+### Fixed
+
+- **RTMP multi-stream visibility.** Multiple simultaneous broadcasts to Steam's RTMP ingest sometimes only showed one stream on the store page, even though `steamapp` confirmed all were live. Root cause: ffmpeg's RTMP library can merge the stream key into `tcUrl` (the RTMP connect URL), making Steam's ingest see each stream connecting to a different "application" — `app/steam_aaaa`, `app/steam_bbbb` — instead of all connecting to `app`. The CDN routing layer then only served streams from the "primary" application. **Fix:** use explicit `-rtmp_app app -rtmp_playpath <key>` instead of embedding the key in the URL. This matches what OBS does on the wire — server URL and stream key as separate RTMP parameters — and ensures every ffmpeg process sends identical `tcUrl` and `app` values. Confirmed working with 6 simultaneous store page broadcasts.
+
+- **Schedule confirmation display.** Dayless `strftime('%H:%M')` hid date changes — a 120-hour broadcast showed identical start and end times (`21:42 → 21:42`). Now shows `03 Jul 21:42` when dates differ from start or today.
+
+### Added
+
+- **Auto-reconnect on stream failure.** Dead ffmpeg processes are restarted automatically with retry count and 10-second cooldown. Unlimited retries by default (`MAX_RECONNECT_RETRIES=0`). Dashboard shows dead-stream state: `DEAD · retrying (3/∞)`, countdown timer, or reconnect flash message on success. Old PIDs are cleaned from atexit guard, logs are appended so diagnostics survive reconnects.
+
+- **Pre-flight codec validation.** Before spawning `-c copy`, each video is probed for FLV-compatible codecs. Rejects HEVC, AV1, VP9, non-AAC/MP3 audio. Warns at spawn time but doesn't block. CAST menu now shows four states: `✓ ready`, `⚠ no key`, `⚠ no video`, `⚠ bad codec`. Games with bad codecs are excluded from broadcast launch.
+
+- **ffmpeg error tail in dashboard.** When a stream dies, the dashboard shows the last diagnostic line from the stream's log file — connection refused, broken pipe, timeout, etc. — instead of just "✗ DEAD." Scans last 4KB of log for recognizable error keywords. Both Rich and plain-text dashboard supported.
+
+- **`venv/` in .gitignore.** Linux development with virtual environments no longer risks committing thousands of site-package files.
+
 ## v1.2.0 — 2026-07-02
 
 ### Added

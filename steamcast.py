@@ -1851,6 +1851,12 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
             console.print(f"[red]⚠  {rich_escape(gname)}: {probe_msg}[/]")
             console.print("[dim]This stream may silently fail — re-encode it first via PREP.[/]")
 
+        # Use explicit RTMP app/playpath instead of embedding the key in the URL.
+        # ffmpeg's RTMP library can merge the key into tcUrl (the connect URL),
+        # making Steam's ingest see each stream as a different "application."
+        # OBS separates server URL and stream key — this matches that behavior.
+        # Without this, only one of multiple simultaneous streams shows on the
+        # Steam store page even though all are confirmed live in steamapp.
         cmd = [
             ffmpeg_path,
             "-re", "-y", "-stream_loop", "-1",
