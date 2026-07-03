@@ -1748,8 +1748,8 @@ def show_cast():
             # Show date when it spans midnight or crosses a day boundary
             show_start_date = start_time.date() != datetime.now().date()
             show_end_date = end_time.date() != start_time.date()
-            start_fmt = start_time.strftime('%d %b %H:%M') if show_start_date else start_time.strftime('%H:%M')
-            end_fmt = end_time.strftime('%d %b %H:%M') if show_end_date else end_time.strftime('%H:%M')
+            start_fmt = start_time.strftime('%Y%m%d %H:%M') if show_start_date else start_time.strftime('%H:%M')
+            end_fmt = end_time.strftime('%Y%m%d %H:%M') if show_end_date else end_time.strftime('%H:%M')
 
             console.print()
             console.print(
@@ -1798,12 +1798,18 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
     if delay_minutes > 0:
         start_at = datetime.now() + timedelta(minutes=delay_minutes)
         end_at = start_at + timedelta(hours=duration_hours) if duration_hours > 0 else None
+
+        show_sd = start_at.date() != datetime.now().date()
+        start_fmt = start_at.strftime('%Y%m%d %H:%M:%S') if show_sd else start_at.strftime('%H:%M:%S')
+
         console.print(
-            f"[cyan]Scheduled:[/] streams will start at [white]{start_at.strftime('%H:%M:%S')}[/]"
+            f"[cyan]Scheduled:[/] streams will start at [white]{start_fmt}[/]"
         )
         if end_at:
+            show_ed = end_at.date() != start_at.date()
+            end_fmt = end_at.strftime('%Y%m%d %H:%M:%S') if show_ed else end_at.strftime('%H:%M:%S')
             console.print(
-                f"[cyan]           will auto-stop at [white]{end_at.strftime('%H:%M:%S')}[/] "
+                f"[cyan]           will auto-stop at [white]{end_fmt}[/] "
                 f"[dim]({int(duration_hours)}h {int((duration_hours % 1) * 60)}m from start)[/]"
             )
         console.print()
