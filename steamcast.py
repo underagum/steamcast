@@ -1324,8 +1324,8 @@ def _attempt_reconnect(
         pass
 
     # ── Reopen log (append so we don't lose old diagnostics) ──
-    stream_url = f"{RTMP_INGEST}/{stream['rtmp_key']}"
     video_path = stream["video_path"]
+    rtmp_key = stream["rtmp_key"]
 
     try:
         log_fh = open(stream["log_file"], "a")
@@ -1341,7 +1341,9 @@ def _attempt_reconnect(
         "-i", str(video_path),
         "-c", "copy",
         "-f", "flv",
-        stream_url,
+        "-rtmp_app", "app",
+        "-rtmp_playpath", rtmp_key,
+        RTMP_INGEST,
     ]
 
     time.sleep(RECONNECT_DELAY_SEC)
@@ -1840,7 +1842,6 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
             continue
 
         log_file = LOG_DIR / f"{safe_name}_cast.log"
-        stream_url = f"{RTMP_INGEST}/{rtmp_key}"
 
         console.print(f"[dim]Starting stream for {rich_escape(gname)}...[/]")
 
@@ -1856,7 +1857,9 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
             "-i", str(video_path),
             "-c", "copy",
             "-f", "flv",
-            stream_url,
+            "-rtmp_app", "app",
+            "-rtmp_playpath", rtmp_key,
+            RTMP_INGEST,
         ]
 
         try:
