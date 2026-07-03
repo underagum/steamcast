@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.3.0 — 2026-07-03
+
+### Added
+
+- **Per-stream RAM monitoring.** Each live stream row now shows the ffmpeg process's RSS (resident memory in MB) alongside CPU% and bitrate. Footer shows total stream count + aggregate ffmpeg memory instead of system-wide RAM% and network TX.
+- **Ctrl+C everywhere.** PREP cancels at any encoding step (single-file convert, multi-file part convert, concat) — kills ffmpeg, deletes partial output, cleans temp directories. Schedule countdown cancels back to CAST menu. No orphaned processes.
+- **Duration formatting with minutes.** Schedule confirmation and countdown now show `"2h 30m"` instead of dropping the fractional hour. Multi-day displays as `"6d 2h 30m"`.
+
+### Changed
+
+- **Schedule input: absolute datetime.** Instead of "start in X minutes, run for X hours," the SCH prompt now takes `YYYYMMDD HH:MM` for both start and end. Zero mental math.
+- **Bitrate lowered to 5000k CBR.** Was 7000k, which could hit Steam's ingest soft cap (~7000k + AAC overhead) and cause stream rejection. 5000k matches known-working OBS configs.
+- **Bitrate display notation.** Dashboard shows `"7.1Mbps"` / `"1498kbps"` instead of `"7.1M"` / `"1498K"`. Unambiguous.
+
+### Removed
+
+- **GPU monitoring from CAST dashboard.** `-c copy` streams don't encode — GPU utilization was misleading noise. Removed `get_gpu_stats()`, `_NVIDIA_SMI` global, and GPU rows from both plain-text and Rich dashboards. `detect_encoder()` remains for PREP.
+- **System-wide RAM/TX footer.** Replaced by per-process RAM on each stream row + aggregate footer. Removed `get_system_ram_tx()`, `_net_baseline`, `_net_baseline_time`.
+
+### Fixed
+
+- **Multi-part PREP: `has_audio` not passed to part conversions.** Videos with no audio track would fail AAC encoding on individual parts in the multi-file path. Now probes once and applies to all parts.
+- **Reconnect messages interleaving with dashboard.** `_attempt_reconnect` no longer calls `console.print` directly — uses the `reconnect_msg` mechanism handled by the monitor loop.
+- **`repair_config` / `save_config` console dependency.** Both functions are now safe to call before the Rich TUI initializes (console reference guarded with `NameError` fallback to stderr).
+
 ## v1.2.2 — 2026-07-02
 
 ### Fixed

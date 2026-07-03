@@ -12,8 +12,8 @@ Two phases:
 
 | Phase | What |
 |-------|------|
-| **PREP** | Convert your video files to Steam's broadcast spec (H.264, AAC, 1080p30, 7 Mbps CBR, 44100Hz) and concatenate multi-part videos by game. One `.mp4` per game, ready to stream. Progress bars for download and extraction. |
-| **CAST** | Set up RTMP keys, toggle which games to broadcast, and start/stop streams — all from one terminal window. **Live per-stream dashboard** with per-game CPU%, real-time bitrate from FFmpeg output, GPU encoder load + VRAM (NVENC), system RAM, and total network TX rate. |
+| **PREP** | Convert your video files to Steam's broadcast spec (H.264, AAC, 1080p30, 5 Mbps CBR, 44100Hz) and concatenate multi-part videos by game. One `.mp4` per game, ready to stream. Progress bars for download and extraction. |
+| **CAST** | Set up RTMP keys, toggle which games to broadcast, and start/stop streams — all from one terminal window. **Live per-stream dashboard** with per-process CPU%, RAM (RSS), and real-time bitrate from ffmpeg output. Schedule broadcasts by absolute start/end datetime. |
 
 ---
 
@@ -123,8 +123,8 @@ From the main menu, pick **CAST** (option 2) — or run `python steamcast.py cas
 - Toggle games ON/OFF by entering their number — **your choices persist** across sessions and broadcasts until you intentionally change them
 - Press `T` to toggle all
 - Press `S` to start broadcasting selected games **immediately**
-- Press `SCH` to **schedule** a broadcast — set a delay ("start in X minutes") and a duration ("run for X hours"). Shows calculated start/end times with a confirmation prompt and countdown
-- While casting: **live per-stream CPU%, bitrate, GPU/encoder load (NVENC), system RAM, and network TX** refresh every 0.5s
+- Press `SCH` to **schedule** a broadcast — set absolute start and end datetimes (`YYYMMDD HH:MM`). Shows a confirmation with formatted duration and a countdown with Ctrl+C cancel
+- While casting: **live per-stream CPU%, RAM (RSS), and bitrate** refresh every 2s
 - Press Enter to stop all streams early, or let the schedule auto-stop
 
 ---
@@ -134,32 +134,28 @@ From the main menu, pick **CAST** (option 2) — or run `python steamcast.py cas
 While broadcasting, each game row shows its own real-time stats:
 
 ```
-DreadOut 2          ● RUNNING   (01:23:45)   PID 18492   CPU 12%   7.0M
-DreadOut Remaster   ● RUNNING   (01:23:44)   PID 18501   CPU 8%    6.8M
+DreadOut 2          ● RUNNING   (01:23:45)   PID 18492   CPU 12%  RAM 145MB  7.0Mbps
+DreadOut Remaster   ● RUNNING   (01:23:44)   PID 18501   CPU 8%   RAM 132MB  6.8Mbps
 
-RAM: 58%   TX: 13.2 MB/s
-GPU: 24%   ENC: 8%    VRAM: 2.3/8.0 GB
+5 streams  720 MB RAM
 ```
 
 | Column | Source | Meaning |
 |--------|--------|---------|
-| **CPU%** | `psutil` per-PID | That specific FFmpeg child's CPU usage |
-| **Bitrate** (7.0M) | FFmpeg stderr `bitrate=...kbits/s` | Actual encoding output rate being pushed to RTMP |
-| **RAM** | System-wide `psutil` | Total memory pressure |
-| **TX** | System-wide NET I/O delta | Total network send rate (all streams combined) |
-| **GPU** | `nvidia-smi` | Total GPU die utilisation (NVIDIA only; silent on Intel/AMD) |
-| **ENC** | `nvidia-smi util.encoder` | NVENC ASIC saturation — your real encoding ceiling |
-| **VRAM** | `nvidia-smi mem.used/total` | GPU memory used out of total available |
+| **CPU%** | `psutil` per-PID | That specific ffmpeg child's CPU usage |
+| **RAM** | `psutil` per-PID RSS | That specific ffmpeg process's resident memory in MB |
+| **Bitrate** | ffmpeg stderr `bitrate=…kbits/s` | Actual encoding output rate being pushed to RTMP |
+| **Footer** | Sum of all ffmpeg processes | Total stream count + aggregate memory usage |
 
-CPU and bitrate turn yellow at 50% (or above target), red at 85%. GPU/ENC turn yellow at 80% encoder load.
+CPU turns yellow at 50%, red at 85%.
 
-> **Tip:** If you're running CPU-only (libx264), the GPU/ENC/VRAM row doesn't appear — it's hardware-encoder-only.
+> **Tip:** Per-process stats require `psutil`. The standalone `.exe` includes it. Python users need `pip install psutil`. Without it, the dashboard shows stream status only — no CPU, RAM, or bitrate.
 
 ---
 
-## GPU Support (Updated)
+## GPU Support (PREP encoding only)
 
-SteamCast automatically detects available hardware encoders in priority order — and **validates driver compatibility** before using NVENC:
+SteamCast automatically detects available hardware encoders in priority order — and **validates driver compatibility** before using NVENC. This applies to the PREP encoding phase. CAST uses `-c copy` (stream copy) regardless of encoder.
 
 | Priority | Encoder | Required | Notes |
 |----------|---------|----------|-------|
@@ -236,7 +232,7 @@ steamcast/
 | Level | 4.1 | 4.1 |
 | Resolution | 1920×1080 | 1920×1080 |
 | Frame rate | 30 or 60 FPS | 30 FPS |
-| Bitrate | 7000 kbps CBR | 7000 kbps CBR (`-b:v -maxrate -bufsize` all equal; `-rc cbr` for NVENC/AMF) |
+| Bitrate | 7000 kbps CBR | 5000 kbps CBR (`-b:v -maxrate -bufsize` all equal; `-rc cbr` for NVENC/AMF) |
 | Keyframe interval | 2 seconds | 2 seconds (60 frames @30fps) |
 | Pixel format | yuv420p | yuv420p |
 | Audio codec | AAC-LC | AAC-LC |
@@ -284,17 +280,14 @@ If you clone the source, you'll need Python 3.9+ and `pip install rich psutil`.
 **Q: Can I broadcast multiple games at once?**
 Yes — each game gets its own FFmpeg process. Toggle them in the CAST menu.
 
-**Q: Does it show per-game resource usage?**
-Yes. The cast dashboard shows per-stream CPU%, bitrate, GPU encoder load + VRAM (NVENC), system RAM, and total network TX. The standalone `.exe` includes everything out of the box. Python users need `pip install psutil`.
+**Q: Does it show per-process resource usage?**
+Yes. The cast dashboard shows per-stream CPU%, RAM (RSS in MB), and bitrate. The footer shows the total stream count + aggregate ffmpeg memory. The standalone `.exe` includes everything out of the box. Python users need `pip install psutil`.
 
 **Q: Do I need to re-toggle games every time I start a broadcast?**
 No. Your ON/OFF choices in the CAST menu persist in `config.json` and survive across broadcasts and restarts. If you want a clean slate, use `[T]` Toggle ALL to flip everything OFF at once.
 
-**Q: Can I see GPU usage while broadcasting with NVENC?**
-Yes — if you're using NVIDIA NVENC, the cast dashboard shows a dedicated GPU row with total GPU utilisation, NVENC encoder load, and VRAM usage. This row disappears automatically if you're on CPU (libx264) or a non-NVIDIA GPU. Does not require additional setup — just needs `nvidia-smi` on your PATH (included with NVIDIA drivers).
-
 **Q: Can I schedule a broadcast to start and stop automatically?**
-Yes. In the CAST menu, type `SCH` instead of `S`. You'll be prompted for a delay ("start in X minutes") and duration ("run for X hours"). SteamCast shows the calculated start and end times, asks for confirmation, then counts down before launching. The broadcast stops automatically at the scheduled end time — or you can press Enter early.
+Yes. In the CAST menu, type `SCH` instead of `S`. You'll be prompted for a start datetime and end datetime in `YYYMMDD HH:MM` format (24h). SteamCast shows a confirmation with the formatted duration, then counts down before launching. Ctrl+C cancels the countdown. The broadcast stops automatically at the scheduled end time — or you can press Enter early.
 
 **Q: What if SteamCast crashes while broadcasting?**
 v1.2.0+ automatically cleans up orphaned ffmpeg processes on crash via an `atexit` handler. If you were on an older version or the cleanup fails, use Task Manager to kill remaining `ffmpeg.exe` processes.

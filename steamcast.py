@@ -41,7 +41,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "1.2.1"
+VERSION = "1.3.0"
 if getattr(sys, 'frozen', False):
     ROOT_DIR = Path(sys.executable).resolve().parent
 else:
@@ -67,7 +67,7 @@ class EncoderSettings:
 class SteamSpec:
     video_profile: str = "high"
     video_level: str = "4.1"
-    video_bitrate: str = "7000k"
+    video_bitrate: str = "5000k"
     video_fps: int = 30
     video_width: int = 1920
     video_height: int = 1080
@@ -125,12 +125,8 @@ def repair_config(cfg: dict) -> dict:
         del cfg["games"][gname]
 
     if to_delete:
-        ok = save_config(cfg)
-        if not ok:
-            # Config couldn't be written — still return cleaned in-memory cfg
-            # to prevent crash, but warn that corruption will return on restart
-            console.print("[yellow]Config corruption detected but could not be saved to disk.[/]")
-            console.print("[dim]The config will be cleaned on next successful save.[/]")
+        save_config(cfg)
+        # If save failed, the caller (load_config) will handle the warning
     return cfg
 
 
@@ -160,10 +156,7 @@ def rich_escape(text: str) -> str:
 # System monitoring (psutil — optional)
 # ══════════════════════════════════════════════════════════════════════
 
-_net_baseline: Optional[int] = None  # bytes_sent from previous sample
-_net_baseline_time: Optional[float] = None
 _proc_cache: dict[int, "psutil.Process"] = {}  # pid → Process object, survives refreshes
-_NVIDIA_SMI: Optional[bool] = None  # None=unprobed, True=found, False=not available
 _ACTIVE_FFMPEG_PIDS: list[int] = []  # tracked for atexit cleanup on crash
 
 
@@ -188,13 +181,13 @@ def _read_log_bitrate(log_path: Path) -> str:
         if m:
             kbps = float(m.group(1))
             if kbps >= 1000:
-                return f"{kbps / 1000:.1f}M"
-            return f"{kbps:.0f}K"
+                return f"{kbps / 1000:.1f}Mbps"
+            return f"{kbps:.0f}kbps"
     return "—"
 
 
 def get_per_stream_stats(active_streams: dict) -> dict:
-    """Return per-stream {gname: {cpu, bitrate}}. Empty if psutil missing."""
+    """Return per-stream {gname: {cpu, mem_mb, bitrate}}. Empty if psutil missing."""
     if not _PSUTIL:
         return {}
 
@@ -207,7 +200,7 @@ def get_per_stream_stats(active_streams: dict) -> dict:
             # Dead process — no live stats
             continue
 
-        # ── Per-process CPU ──
+        # ── Per-process CPU & RAM ──
         pid = proc.pid
         try:
             p = _proc_cache.get(pid)
@@ -216,14 +209,16 @@ def get_per_stream_stats(active_streams: dict) -> dict:
                 p.cpu_percent()  # prime
                 _proc_cache[pid] = p
             cpu = p.cpu_percent()
+            mem_mb = p.memory_info().rss / 1024 / 1024  # RSS in MB
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             _proc_cache.pop(pid, None)
             cpu = 0.0
+            mem_mb = 0.0
 
         # ── Bitrate from ffmpeg stderr log ──
         bitrate = _read_log_bitrate(stream["log_file"])
 
-        result[gname] = {"cpu": cpu, "bitrate": bitrate}
+        result[gname] = {"cpu": cpu, "mem_mb": mem_mb, "bitrate": bitrate}
 
     # Prune dead PIDs from cache
     live_pids = {s["process"].pid for s in active_streams.values() if s["process"].poll() is None}
@@ -232,105 +227,6 @@ def get_per_stream_stats(active_streams: dict) -> dict:
             _proc_cache.pop(pid, None)
 
     return result
-
-
-def get_system_ram_tx() -> Optional[dict]:
-    """Return system RAM% and total network TX rate. Returns None if psutil missing."""
-    if not _PSUTIL:
-        return None
-
-    global _net_baseline, _net_baseline_time
-
-    mem = psutil.virtual_memory().percent
-    net = psutil.net_io_counters()
-    now = time.time()
-    rate_str = "—"
-
-    if _net_baseline is not None and _net_baseline_time is not None:
-        elapsed = now - _net_baseline_time
-        if elapsed > 0.5:
-            tx_delta = net.bytes_sent - _net_baseline
-            rate = tx_delta / elapsed
-            if rate >= 1024 * 1024:
-                rate_str = f"{rate / 1024 / 1024:.1f} MB/s"
-            elif rate >= 1024:
-                rate_str = f"{rate / 1024:.0f} KB/s"
-            else:
-                rate_str = f"{rate:.0f} B/s"
-
-    _net_baseline = net.bytes_sent
-    _net_baseline_time = now
-
-    return {"mem": mem, "net_tx": rate_str}
-
-
-def get_gpu_stats(enc: Optional["EncoderSettings"]) -> Optional[dict]:
-    """Return GPU encoder utilisation and VRAM. Only works for NVENC (nvidia-smi).
-    Returns None if not a hardware encoder, nvidia-smi is unavailable, or query fails.
-    Probes once — failures are cached for the session."""
-    global _NVIDIA_SMI
-
-    if enc is None or not enc.is_hardware:
-        return None
-
-    # Only NVIDIA for now — QSV/AMF monitoring can be added later
-    if "nvenc" not in enc.codec:
-        return None
-
-    if _NVIDIA_SMI is False:
-        return None
-
-    try:
-        result = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=utilization.gpu,utilization.encoder,memory.used,memory.total",
-                "--format=csv,noheader,nounits",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        _NVIDIA_SMI = False
-        return None
-
-    if result.returncode != 0 or not result.stdout.strip():
-        _NVIDIA_SMI = False
-        return None
-
-    _NVIDIA_SMI = True
-
-    # nvidia-smi returns one CSV line per GPU. On multi-GPU systems,
-    # pick the GPU with the highest encoder utilization — that's the one
-    # actually doing the work. If none have encoder activity, return the
-    # first GPU's stats.
-    lines = result.stdout.strip().splitlines()
-    best = None
-    best_enc = -1
-
-    for line in lines:
-        parts = line.split(",")
-        if len(parts) < 4:
-            continue
-        try:
-            gpu_pct = float(parts[0].strip())
-            enc_pct = float(parts[1].strip())
-            vram_used = int(parts[2].strip())
-            vram_total = int(parts[3].strip())
-        except (ValueError, IndexError):
-            continue
-
-        if enc_pct > best_enc:
-            best_enc = enc_pct
-            best = {
-                "gpu_pct": gpu_pct,
-                "enc_pct": enc_pct,
-                "vram_used": vram_used,
-                "vram_total": vram_total,
-            }
-
-    return best
 
 
 # ─── FFmpeg ───────────────────────────────────────────────────────────
@@ -670,9 +566,11 @@ def run_ffmpeg(
                 if on_progress:
                     on_progress(_condense_progress(stripped))
         proc.wait()
-    except Exception:
+    except BaseException:
+        # Ctrl+C or unexpected failure — kill ffmpeg, don't leave orphans
         proc.kill()
         proc.wait()
+        raise
 
     # Also collect stdout (usually empty for ffmpeg)
     stdout = proc.stdout.read() if proc.stdout else ""
@@ -897,7 +795,10 @@ def save_config(cfg: dict) -> bool:
         CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
         return True
     except OSError as e:
-        console.print(f"[red]Failed to save config: {e}[/]")
+        try:
+            console.print(f"[red]Failed to save config: {e}[/]")
+        except NameError:
+            print(f"[ERROR] Failed to save config: {e}", file=sys.stderr)
         return False
 
 
@@ -1166,6 +1067,9 @@ def show_prep_phase():
         clean = clean[:cols]
         print(clean, end="", flush=True)
 
+    console.print("[dim]Press Ctrl+C to cancel at any time.[/]")
+
+    cancelled = False
     for gname in sorted(game_groups):
         files = sorted(game_groups[gname], key=lambda f: f.name)
         safe_name = sanitize_filename(gname)
@@ -1186,8 +1090,16 @@ def show_prep_phase():
             prep_log = LOG_DIR / f"{safe_name}_prep.log"
             has_audio = has_audio_stream(files[0])
             console.print(f"\n[dim]Converting {rich_escape(gname)}...[/]")
-            ok = convert_video(files[0], out_path, enc, log_file=prep_log, on_progress=_show_progress, has_audio=has_audio)
-            # Clear progress line
+            try:
+                ok = convert_video(files[0], out_path, enc, log_file=prep_log, on_progress=_show_progress, has_audio=has_audio)
+            except KeyboardInterrupt:
+                print("\r\033[K", end="", flush=True)
+                console.print(f"\n[yellow]Cancelled during {rich_escape(gname)}. Cleaning up...[/]")
+                if out_path.exists():
+                    out_path.unlink(missing_ok=True)
+                cancelled = True
+                break
+            # Clear progress line (single file)
             print("\r\033[K", end="", flush=True)
             if ok:
                 console.print(f"[green]✓ {rich_escape(gname)} converted successfully[/]")
@@ -1205,6 +1117,7 @@ def show_prep_phase():
             temp_dir = INPUT_DIR / f".temp_{uuid.uuid4().hex[:8]}"
             temp_dir.mkdir(parents=True, exist_ok=True)
 
+            has_audio = has_audio_stream(files[0])
             converted = []
             all_ok = True
 
@@ -1212,8 +1125,16 @@ def show_prep_phase():
                 temp_out = temp_dir / f"{f.stem}_steam.mp4"
                 part_log = LOG_DIR / f"{safe_name}_part{idx}_prep.log"
                 console.print(f"\n[dim]Converting {f.name}...[/]")
-                ok = convert_video(f, temp_out, enc, log_file=part_log, on_progress=_show_progress)
-                # Clear progress line
+                try:
+                    ok = convert_video(f, temp_out, enc, log_file=part_log, on_progress=_show_progress, has_audio=has_audio)
+                except KeyboardInterrupt:
+                    print("\r\033[K", end="", flush=True)
+                    console.print(f"\n[yellow]Cancelled during {f.name}. Cleaning up...[/]")
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    all_ok = False
+                    cancelled = True
+                    break
+                # Clear progress line (multi-part)
                 print("\r\033[K", end="", flush=True)
                 if not ok:
                     console.print(f"[red]✗ Failed to convert {f.name}[/]")
@@ -1240,7 +1161,16 @@ def show_prep_phase():
                 concat_log = LOG_DIR / f"{safe_name}_concat.log"
                 has_audio = has_audio_stream(files[0])
                 console.print(f"\n[dim]Concatenating {len(converted)} files for {rich_escape(gname)}...[/]")
-                ok = concat_videos(playlist_path, out_path, enc, log_file=concat_log, on_progress=_show_progress, has_audio=has_audio)
+                try:
+                    ok = concat_videos(playlist_path, out_path, enc, log_file=concat_log, on_progress=_show_progress, has_audio=has_audio)
+                except KeyboardInterrupt:
+                    print("\r\033[K", end="", flush=True)
+                    console.print(f"\n[yellow]Cancelled during concat for {rich_escape(gname)}. Cleaning up...[/]")
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    if out_path.exists():
+                        out_path.unlink(missing_ok=True)
+                    cancelled = True
+                    break
                 # Clear progress line
                 print("\r\033[K", end="", flush=True)
 
@@ -1260,6 +1190,9 @@ def show_prep_phase():
 
             # Cleanup temp
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    if cancelled:
+        break
 
     # Report
     console.print(f"\n[bold green]=== Prep Complete ===[/]")
@@ -1379,10 +1312,6 @@ def _attempt_reconnect(
         stream["reconnect_msg"] = (
             f"↻ Reconnected (attempt {stream['retries']})"
         )
-    console.print(
-        f"[yellow]↻  {rich_escape(gname)} reconnected "
-        f"(attempt {stream['retries']}{'/' + str(MAX_RECONNECT_RETRIES) if MAX_RECONNECT_RETRIES > 0 else ''}, PID {proc.pid})[/]"
-    )
     return True
 
 
@@ -1624,7 +1553,7 @@ def show_cast():
         console.print("[cyan][A][/] Add/Edit keys (Setup)")
         console.print("[cyan][P][/] Go to Prep")
         console.print("[green][S][/] Start broadcasting")
-        console.print("[cyan][SCH][/] Schedule broadcast (start in X min, run for X hours)")
+        console.print("[cyan][SCH][/] Schedule broadcast (set start & end datetime)")
         console.print("[red][Q][/] Back to main menu")
 
         if RICH:
@@ -1720,42 +1649,60 @@ def show_cast():
 
             # ── Schedule prompts ──
             console.print()
-            if RICH:
-                delay_str = Prompt.ask("[cyan]Start in how many minutes?[/]", default="30").strip()
-            else:
-                delay_str = input("Start in how many minutes? [30]: ").strip()
-                delay_str = delay_str or "30"
-            try:
-                delay_minutes = max(1, int(delay_str))
-            except ValueError:
-                delay_minutes = 30
+            console.print("[dim]Enter dates as YYYYMMDD HH:MM (24h).[/]")
+
+            now = datetime.now().replace(microsecond=0)
 
             if RICH:
-                dur_str = Prompt.ask("[cyan]Run for how many hours?[/]", default="2").strip()
+                start_str = Prompt.ask("[cyan]Start[/]").strip()
             else:
-                dur_str = input("Run for how many hours? [2]: ").strip()
-                dur_str = dur_str or "2"
+                start_str = input("Start (YYYMMDD HH:MM): ").strip()
+
             try:
-                duration_hours = max(0.1, float(dur_str))
+                start_dt = datetime.strptime(start_str, "%Y%m%d %H:%M")
             except ValueError:
-                duration_hours = 2
+                console.print("[red]Invalid format. Expected YYYYMMDD HH:MM[/]")
+                continue
 
-            start_time = datetime.now().replace(microsecond=0) + timedelta(minutes=delay_minutes)
-            end_time = start_time + timedelta(hours=duration_hours)
-            dur_h = int(duration_hours)
-            dur_m = int((duration_hours - dur_h) * 60)
+            if start_dt <= now:
+                console.print("[red]Start must be in the future.[/]")
+                continue
 
-            # Show date when it spans midnight or crosses a day boundary
-            show_start_date = start_time.date() != datetime.now().date()
-            show_end_date = end_time.date() != start_time.date()
-            start_fmt = start_time.strftime('%Y%m%d %H:%M') if show_start_date else start_time.strftime('%H:%M')
-            end_fmt = end_time.strftime('%Y%m%d %H:%M') if show_end_date else end_time.strftime('%H:%M')
+            if RICH:
+                end_str = Prompt.ask("[cyan]End[/]").strip()
+            else:
+                end_str = input("End   (YYYMMDD HH:MM): ").strip()
+
+            try:
+                end_dt = datetime.strptime(end_str, "%Y%m%d %H:%M")
+            except ValueError:
+                console.print("[red]Invalid format. Expected YYYYMMDD HH:MM[/]")
+                continue
+
+            if end_dt <= start_dt:
+                console.print("[red]End must be after start.[/]")
+                continue
+
+            duration_hours = round((end_dt - start_dt).total_seconds() / 3600, 1)
+            delay_minutes = max(0, int((start_dt - now).total_seconds() / 60))
+
+            dur_d = int(duration_hours // 24)
+            dur_h = int(duration_hours % 24)
+            dur_m = int((duration_hours * 60) % 60)
+            parts = []
+            if dur_d > 0:
+                parts.append(f"{dur_d}d")
+            if dur_h > 0 or dur_d > 0:
+                parts.append(f"{dur_h}h")
+            if dur_m > 0:
+                parts.append(f"{dur_m}m")
+            dur_fmt = " ".join(parts) if parts else "0m"
 
             console.print()
             console.print(
-                f"[bold cyan]Broadcast will start at[/] [white]{start_fmt}[/]\n"
-                f"[bold cyan]and run until[/] [white]{end_fmt}[/] "
-                f"[dim]({dur_h}h {dur_m}m)[/]"
+                f"[bold cyan]Start:[/] [white]{start_dt.strftime('%Y%m%d %H:%M')}[/]  "
+                f"[bold cyan]End:[/] [white]{end_dt.strftime('%Y%m%d %H:%M')}[/]  "
+                f"[dim]({dur_fmt})[/]"
             )
 
             if RICH:
@@ -1808,21 +1755,36 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
         if end_at:
             show_ed = end_at.date() != start_at.date()
             end_fmt = end_at.strftime('%Y%m%d %H:%M:%S') if show_ed else end_at.strftime('%H:%M:%S')
+            dur_d = int(duration_hours // 24)
+            dur_h = int(duration_hours % 24)
+            dur_m = int((duration_hours * 60) % 60)
+            parts = []
+            if dur_d > 0:
+                parts.append(f"{dur_d}d")
+            if dur_h > 0 or dur_d > 0:
+                parts.append(f"{dur_h}h")
+            if dur_m > 0:
+                parts.append(f"{dur_m}m")
+            dur_fmt = " ".join(parts) if parts else "0m"
             console.print(
                 f"[cyan]           will auto-stop at [white]{end_fmt}[/] "
-                f"[dim]({int(duration_hours)}h {int((duration_hours % 1) * 60)}m from start)[/]"
+                f"[dim]({dur_fmt} from start)[/]"
             )
         console.print()
 
         remaining = delay_minutes * 60
-        while remaining > 0:
-            m, s = divmod(remaining, 60)
-            if RICH:
-                console.print(f"\r[dim]Starting in {m:02d}:{s:02d}...[/]  ", end="")
-            else:
-                print(f"\rStarting in {m:02d}:{s:02d}...  ", end="", flush=True)
-            time.sleep(1)
-            remaining -= 1
+        try:
+            while remaining > 0:
+                m, s = divmod(remaining, 60)
+                if RICH:
+                    console.print(f"\r[dim]Starting in {m:02d}:{s:02d}... (Ctrl+C to cancel)[/]  ", end="")
+                else:
+                    print(f"\rStarting in {m:02d}:{s:02d}... (Ctrl+C to cancel)  ", end="", flush=True)
+                time.sleep(1)
+                remaining -= 1
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Scheduled broadcast cancelled.[/]")
+            return
         console.print("\n[bold green]Starting now![/]\n")
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1971,13 +1933,14 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                     print(f"\033[K  [yellow]{stream['reconnect_msg']}[/]")
                     stream["reconnect_msg"] = ""
 
-                # Per-stream CPU + bitrate (only if psutil is available)
+                # Per-stream CPU + RAM + bitrate (only if psutil is available)
                 if show_detail and proc.poll() is None:
                     ss = stream_stats.get(gname, {})
                     cpu_val = ss.get("cpu", 0)
+                    mem_val = ss.get("mem_mb", 0)
                     bitrate_val = ss.get("bitrate", "—")
                     cpu_color = "\033[33m" if cpu_val > 50 else "\033[32m"
-                    detail = f"  CPU: {cpu_color}{cpu_val:.0f}%\033[0m  {bitrate_val}"
+                    detail = f"  CPU {cpu_color}{cpu_val:.0f}%\033[0m  RAM {mem_val:.0f}MB  {bitrate_val}"
                 else:
                     detail = ""
 
@@ -1997,29 +1960,15 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                     if err:
                         print(f"\033[K    \033[31m{err[:120]}\033[0m")
 
-            # System RAM + total TX
-            sys_stats = get_system_ram_tx()
-            if sys_stats:
-                mem_color = "\033[31m" if sys_stats["mem"] > 85 else "\033[33m" if sys_stats["mem"] > 60 else "\033[32m"
-                print(f"\033[K  RAM: {mem_color}{sys_stats['mem']:.0f}%\033[0m  TX: {sys_stats['net_tx']}")
-                lines = len(active_streams) + 1
-            else:
-                lines = len(active_streams)
+            # Summary: stream count + total ffmpeg RAM
+            live = sum(1 for s in active_streams.values() if s["process"].poll() is None)
+            total_mem = sum(ss.get("mem_mb", 0) for ss in stream_stats.values())
+            print(f"\033[K  {live} streams  {total_mem:.0f} MB RAM")
+            lines = len(active_streams) + 1
 
-            # GPU stats (NVENC only via nvidia-smi)
-            gpu = get_gpu_stats(_cached_encoder)
-            if gpu:
-                enc_color = "\033[33m" if gpu["enc_pct"] > 80 else "\033[32m"
-                gpu_color = "\033[33m" if gpu["gpu_pct"] > 80 else "\033[32m"
-                print(
-                    f"\033[K  GPU: {gpu_color}{gpu['gpu_pct']:.0f}%\033[0m  "
-                    f"ENC: {enc_color}{gpu['enc_pct']:.0f}%\033[0m  "
-                    f"VRAM: {gpu['vram_used'] / 1024:.1f}/{gpu['vram_total'] / 1024:.1f} GB"
-                )
-                lines += 1
             print(f"\033[{lines}A", end="")
             time.sleep(2)
-        print("\n")
+        print("\n\n")
     else:
         # Rich live monitor
         running = True
@@ -2040,14 +1989,16 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                     icon = "[green]●[/]"
                     status = "RUNNING"
 
-                    # Per-stream CPU + bitrate (only if psutil is available)
+                    # Per-stream CPU + RAM + bitrate (only if psutil is available)
                     if show_detail:
                         ss = stream_stats.get(gname, {})
                         cpu_val = ss.get("cpu", 0)
+                        mem_val = ss.get("mem_mb", 0)
                         bitrate_val = ss.get("bitrate", "—")
                         cpu_str = f"[dim]{cpu_val:.0f}%[/]" if cpu_val < 50 else f"[yellow]{cpu_val:.0f}%[/]"
+                        mem_str = f"[dim]{mem_val:.0f}MB[/]"
                         bitrate_str = f"[dim]{bitrate_val}[/]"
-                        detail = f"  CPU {cpu_str}  {bitrate_str}"
+                        detail = f"  CPU {cpu_str}  RAM {mem_str}  {bitrate_str}"
                     else:
                         detail = ""
                 else:
@@ -2088,26 +2039,11 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                             f"[red dim]{err[:120]}[/]",
                         )
 
-            # System RAM + total TX (system-wide)
-            sys_stats = get_system_ram_tx()
-            if sys_stats:
-                table.add_row("")  # spacer
-                mem_color = "red" if sys_stats["mem"] > 85 else "yellow" if sys_stats["mem"] > 60 else "green"
-                table.add_row(
-                    f"[dim]RAM:[/] [{mem_color}]{sys_stats['mem']:.0f}%[/]  "
-                    f"[dim]TX:[/] [white]{sys_stats['net_tx']}[/]",
-                )
-
-            # GPU stats (NVENC / QSV / AMF)
-            gpu = get_gpu_stats(_cached_encoder)
-            if gpu:
-                enc_color = "yellow" if gpu["enc_pct"] > 80 else "green"
-                gpu_color = "yellow" if gpu["gpu_pct"] > 80 else "green"
-                table.add_row(
-                    f"[dim]GPU:[/] [{gpu_color}]{gpu['gpu_pct']:.0f}%[/]  "
-                    f"[dim]ENC:[/] [{enc_color}]{gpu['enc_pct']:.0f}%[/]  "
-                    f"[dim]VRAM:[/] [white]{gpu['vram_used'] / 1024:.1f}/{gpu['vram_total'] / 1024:.1f} GB[/]",
-                )
+            # Summary: stream count + total ffmpeg RAM
+            live = sum(1 for s in active_streams.values() if s["process"].poll() is None)
+            total_mem = sum(ss.get("mem_mb", 0) for ss in stream_stats.values())
+            table.add_row("")  # spacer
+            table.add_row(f"[dim]{live} streams  {total_mem:.0f} MB RAM[/]")
 
             return table
 
