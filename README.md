@@ -1,239 +1,132 @@
 # SteamCast
 
-> Prepare and broadcast multiple videos to Steam store pages — no OBS, no server setup, no Python required.
+> Put your game trailers on your Steam store pages — 24/7, no OBS, no server, no fuss.
 
-SteamCast is a lightweight FFmpeg-based broadcasting tool for game developers and publishers who want to run 24/7 videos on their Steam store pages during sales or events. **Download the `.exe` and run it — that's it.** Near-zero CPU when using hardware encoding (NVENC).
+SteamCast is a lightweight broadcasting tool for game developers and publishers who want looping video on their Steam store during sales, festivals, or just because it looks good. **Download the `.exe`, drop in your videos, paste your RTMP keys, and you're live.** Near-zero CPU overhead because it uses `-c copy` — no re-encoding at broadcast time.
 
 ---
 
 ## What It Does
 
-Two phases:
+Two simple phases:
 
-| Phase | What |
-|-------|------|
-| **PREP** | Convert your video files to Steam's broadcast spec (H.264, AAC, 1080p30, 5 Mbps CBR, 44100Hz) and concatenate multi-part videos by game. One `.mp4` per game, ready to stream. Progress bars for download and extraction. |
-| **CAST** | Set up RTMP keys, toggle which games to broadcast, and start/stop streams — all from one terminal window. **Live per-stream dashboard** with per-process CPU%, RAM (RSS), and real-time bitrate from ffmpeg output. Schedule broadcasts by absolute start/end datetime. |
-
----
-
-## How It Works
-
-Every time you launch SteamCast, it runs through a startup sequence designed to be zero-config:
-
-**1. Prerequisites check** — validates Python ≥ 3.9, `rich`, and `psutil` are available. If anything is missing, it prints a clear error with install instructions and exits (before the TUI renders).
-
-**2. FFmpeg auto-detection** — checks for FFmpeg in this order:
-| Priority | Location | When |
-|----------|----------|------|
-| 1 | `ffmpeg/ffmpeg.exe` (bundled, next to the `.exe` or script) | Auto-downloaded on first run |
-| 2 | System PATH (`ffmpeg` command) | User already has FFmpeg installed |
-
-If neither is found, SteamCast auto-downloads a portable FFmpeg build from gyan.dev. Before the download, it fetches a tiny `.ver` file (~10 bytes) to discover the version — so the progress bar shows "Downloading v8.1.2..." instead of a generic label. The `.ver` fetch is non-blocking: if it fails (offline, server error), the download proceeds without showing a version number.
-
-**3. Encoder auto-detection** (PREP only) — probes `ffmpeg -encoders` and picks the best available encoder. NVENC gets special treatment: a 1-frame test encode (256×256 black frame, preset/bitrate flags stripped to avoid false negatives with extreme combinations) verifies the driver actually works. If it fails, the exact FFmpeg error is shown with a diagnostic and a Y/n prompt to fall back to CPU.
-
-**4. Version check** — a background thread pings the GitHub `version.txt` (5s timeout). If a newer release is available, a notification appears in the terminal. Fails silently if offline.
-
-**5. Crash logging** — a global exception hook captures any unhandled crash and writes the full traceback to `logs/steamcast_crash.log`. The terminal also shows the crash with the log path.
-
-**6. Config auto-repair** — on every load, `config.json` is scanned for corruption (non-dict entries, Steam RTMP keys accidentally stored as game names). Damaged entries are silently removed and the config is rewritten. You'll never see a broken config crash.
-
----
-
-## Getting SteamCast
-
-You have two options — pick one.
-
-### Option A: Standalone .exe (recommended)
-
-**No Python, no pip, no setup.** Download the `.exe` and double-click it.
-
-| Requirement | Detail |
-|-------------|--------|
-| **Windows 10/11 (64-bit)** | Primary platform |
-| **GPU (optional)** | NVIDIA NVENC (driver ≥ 610.00), Intel QSV, or AMD AMF — auto-detected. Falls back to CPU encoding if none found. |
-| **Steam broadcast key** | From [Steamworks](https://partner.steamgames.com) for each game |
-| **Internet** | First run only — auto-downloads portable FFmpeg (~55 MB). **Skips if FFmpeg is already on your system PATH.** Runs completely offline after download. |
-
-**[Download steamcast.exe](https://github.com/underagum/steamcast/releases/latest)** from the Releases page. Put it in its own folder, double-click, and you're in the main menu. Nothing else to install.
-
-### Option B: Run from source (Python)
-
-For developers, Linux/macOS users, or anyone who prefers running the script directly.
-
-| Requirement | Detail |
-|-------------|--------|
-| **Python 3.9+** (3.11 recommended) | |
-| **`rich`** | `pip install rich` — colored TUI |
-| **`psutil`** | `pip install psutil` — live system monitoring in CAST dashboard (required) |
-| **Windows 10/11, Linux, or macOS** | Windows is primary; Linux/macOS are tested but secondary |
-| **GPU (optional)** | Same as above — NVIDIA NVENC, Intel QSV, AMD AMF, or CPU fallback |
-| **Steam broadcast key** | From [Steamworks](https://partner.steamgames.com) |
-| **FFmpeg** | Auto-detected and auto-downloaded. Checks bundled `ffmpeg/` first, then system PATH. Downloads portable build (~55 MB) on first run if neither is found. Internet required once. |
-
-```bash
-git clone https://github.com/underagum/steamcast.git
-cd steamcast
-pip install rich psutil
-python steamcast.py
-```
-
-> The standalone `.exe` bundles Python, Rich, and psutil — no missing dependencies, no setup.
+| Phase | What happens |
+|---|---|
+| **PREP** | Converts your videos to Steam's broadcast spec (H.264, AAC, 1080p30, 5 Mbps CBR). Merges multi-part videos per game. One clean `.mp4` per title, ready to go. |
+| **CAST** | Pick which games to broadcast, toggle them on/off, and start streaming — either immediately or on a schedule. A live dashboard shows per-stream CPU%, memory (RSS), and real-time bitrate. |
 
 ---
 
 ## Quick Start
 
-### Step 1: Launch SteamCast
+### 1. Get the tool
 
-| If you're using... | Do this |
-|--------------------|---------|
-| **Standalone .exe** | Double-click `steamcast.exe`. You'll see the main menu. Jump to **PREP** (option 1). |
-| **Python source** | `python steamcast.py` (or `python steamcast.py prep` to jump straight in) |
+**[Download steamcast.exe](https://github.com/underagum/steamcast/releases/latest)** from Releases. Put it in its own folder. Double-click.
 
-First launch auto-downloads FFmpeg (~55 MB, one-time). You'll see a progress bar — let it finish.
+No Python. No pip. No setup. First launch auto-downloads FFmpeg (~55 MB, one-time).
 
-### Step 2: Prepare videos
+*Prefer running from source?* `git clone`, `pip install rich psutil`, `python steamcast.py`.
 
-1. Copy your video files into the `input/` folder
-2. Name them like this:
+### 2. Drop in your videos
+
+Copy files into the `input/` folder. Name them by game:
 
 ```
 input/
-├── dreadout 3.mp4          ← single video for this game
-├── dreadout 3_1.mkv        ← part 1 (multiple videos for same game)
-├── dreadout 3_2.mp4        ← part 2
-└── graveless.mp4          ← another game
+├── dreadout 3.mp4          ← one video for this game
+├── dreadout 3_1.mkv        ← part 1 of a multi-part video
+├── dreadout 3_2.mp4        ← part 2 (gets concatenated)
+└── graveless.mp4           ← another game
 ```
 
-> The tool parses game names from your filenames. `_1`, `_2` etc. mean "multiple files to concatenate". Everything before `_NUMBER` is the game name.
+> Files ending with `_1`, `_2` etc. are treated as parts of the same game and merged during PREP.
 
-3. Follow the prompts — the tool probes your GPU, **validates the driver**, and picks the best encoder
-4. Output goes to `output/` — one `.mp4` per game
+### 3. Prep your videos
 
-### Step 3: Set up RTMP keys
+From the menu, pick **PREP** (or run `python steamcast.py prep`). SteamCast detects your best encoder, converts everything to Steam spec, and writes ready-to-stream `.mp4` files to `output/`.
 
-From the main menu, pick **Setup** (option 3) — or run `python steamcast.py setup`. Add game names and paste RTMP keys from Steamworks. Keys are stored locally in `config.json`. **No data leaves your machine.**
+### 4. Add RTMP keys
 
-### Step 4: Cast
+Pick **Setup** (or `python steamcast.py setup`). Paste the RTMP key from [Steamworks](https://partner.steamgames.com) for each game. Keys stay in `config.json` on your machine — nothing leaves.
 
-From the main menu, pick **CAST** (option 2) — or run `python steamcast.py cast`.
+> **Heads up:** Make sure the Steam account that owns each RTMP key is whitelisted in Steamworks → Store Page → Broadcast Settings. If the whitelist isn't published, Steam will boot the stream after a couple minutes.
 
-- Toggle games ON/OFF by entering their number — **your choices persist** across sessions and broadcasts until you intentionally change them
-- Press `T` to toggle all
-- Press `S` to start broadcasting selected games **immediately**
-- Press `SCH` to **schedule** a broadcast — set absolute start and end datetimes (`YYYMMDD HH:MM`). Shows a confirmation with formatted duration and a countdown with Ctrl+C cancel
-- While casting: **live per-stream CPU%, RAM (RSS), and bitrate** refresh every 2s
-- Press Enter to stop all streams early, or let the schedule auto-stop
+### 5. Go live
+
+Pick **CAST** (or `python steamcast.py cast`). Toggle games on/off, then hit **S** to start now or **SCH** to schedule (e.g., `20260715 09:00` to `20260715 18:00`). Ctrl+C cancels anytime.
 
 ---
 
-## Live Cast Dashboard
+## The Dashboard
 
-While broadcasting, each game row shows its own real-time stats:
+While broadcasting, each game row shows its own live stats:
 
 ```
 DreadOut 2          ● RUNNING   (01:23:45)   PID 18492   CPU 12%  RAM 145MB  7.0Mbps
 DreadOut Remaster   ● RUNNING   (01:23:44)   PID 18501   CPU 8%   RAM 132MB  6.8Mbps
 
-5 streams  720 MB RAM
+5 streams · 720 MB total ffmpeg memory
 ```
 
-| Column | Source | Meaning |
-|--------|--------|---------|
-| **CPU%** | `psutil` per-PID | That specific ffmpeg child's CPU usage |
-| **RAM** | `psutil` per-PID RSS | That specific ffmpeg process's resident memory in MB |
-| **Bitrate** | ffmpeg stderr `bitrate=…kbits/s` | Actual encoding output rate being pushed to RTMP |
-| **Footer** | Sum of all ffmpeg processes | Total stream count + aggregate memory usage |
+| Column | What it means |
+|---|---|
+| **CPU%** | That ffmpeg process's CPU usage |
+| **RAM** | Resident memory (RSS) in MB |
+| **Bitrate** | Actual data rate being pushed to Steam, pulled from ffmpeg output |
 
 CPU turns yellow at 50%, red at 85%.
 
-> **Tip:** Per-process stats require `psutil`. The standalone `.exe` includes it. Python users need `pip install psutil`. Without it, the dashboard shows stream status only — no CPU, RAM, or bitrate.
+---
+
+## GPU Encoding (PREP only)
+
+During PREP, SteamCast picks the best hardware encoder available. CAST uses `-c copy` — no encoding happens at broadcast time, so this only matters for the one-time conversion step.
+
+| Priority | Encoder | What you need |
+|---|---|---|
+| 1 | **NVIDIA NVENC** | NVIDIA GPU + driver ≥ 610.00 |
+| 2 | **Intel QSV** | Intel GPU with Quick Sync |
+| 3 | **AMD AMF** | AMD GPU |
+| 4 | **CPU fallback** (`libx264`) | Works everywhere, just slower |
+
+NVENC gets a 1-frame test encode to verify the driver actually works. If your driver's too old, SteamCast tells you exactly what's wrong and asks before falling back to CPU.
 
 ---
 
-## GPU Support (PREP encoding only)
+## How It Starts Up
 
-SteamCast automatically detects available hardware encoders in priority order — and **validates driver compatibility** before using NVENC. This applies to the PREP encoding phase. CAST uses `-c copy` (stream copy) regardless of encoder.
+Every launch runs a silent health check so you don't have to think about it:
 
-| Priority | Encoder | Required | Notes |
-|----------|---------|----------|-------|
-| 1 | **NVIDIA NVENC** (`h264_nvenc`) | NVIDIA GPU + **driver ≥ 610.00** | Preset p7, CBR. Validated with a **1-frame test encode** (256×256 black frame, `-preset p7 -rc cbr` flags stripped to avoid false negatives). If the driver is too old or the GPU lacks NVENC, SteamCast shows the exact FFmpeg error with a diagnostic and asks before falling back to CPU. |
-| 2 | **Intel QSV** (`h264_qsv`) | Intel GPU with Quick Sync | Preset veryfast |
-| 3 | **AMD AMF** (`h264_amf`) | AMD GPU | Only in FFmpeg FULL build; Preset quality, CBR |
-| 4 | **Software fallback** (`libx264`) | CPU only | Slower encode, same quality |
+- **FFmpeg** — found in the bundled `ffmpeg/` folder, or on your system PATH, or auto-downloaded from gyan.dev
+- **Encoder** — probed and validated (NVENC gets a test encode to catch driver issues)
+- **Config** — checked for corruption on every load; broken entries are silently removed
+- **Version** — quick ping to GitHub; if there's a newer release, you get a notification
+- **Crashes** — unhandled errors are caught and written to `logs/steamcast_crash.log` with the full traceback
 
-### NVENC Driver Warning
-
-If your NVIDIA driver is older than 610.00, you'll see:
-
-```
-NVIDIA NVENC found but driver is too old.
-  Driver does not support the required nvenc API version. Required: 13.1 Found: 13.0
-Fix: install NVIDIA driver ≥ 610.00 from https://www.nvidia.com/download/
-
-Fall back to CPU encoding (libx264)? [Y/n]
-```
-
-- **Y** — proceeds with libx264 (slower but works)
-- **n** — aborts Prep so you can update drivers and retry
-
-**Fix:** Download the latest driver from [nvidia.com/download](https://www.nvidia.com/download/) and restart SteamCast.
+None of this requires your attention unless something actually breaks.
 
 ---
 
-## Folder Structure
+## CLI Shortcuts
 
-**Standalone .exe users:** Just put `steamcast.exe` in its own folder. The `input/`, `output/`, `ffmpeg/`, `logs/` directories and `config.json` are auto-created next to the `.exe` on first run.
-
-**Python source:**
-
-```
-steamcast/
-├── steamcast.py          ← Main script (cross-platform)
-├── config.json           ← Your RTMP keys (local only, gitignored)
-├── README.md
-├── version.txt
-├── requirements.txt      ← rich, psutil
-├── .github/workflows/    ← GitHub Actions CI (auto-builds Windows .exe)
-├── build/
-│   ├── build.bat          ← Windows build script (double-click to build .exe)
-│   ├── steamcast.spec     ← PyInstaller spec for standalone .exe
-│   └── steamcast.exe      ← Pre-built binary (GitHub Release download)
-├── input/                ← Drop video files here (gitignored)
-├── output/               ← Processed .mp4s appear here (gitignored)
-├── ffmpeg/               ← Auto-downloaded portable FFmpeg (gitignored)
-└── logs/                 ← Conversion + stream logs (gitignored)
-    ├── BSE_prep.log
-    ├── BSE_cast.log
-    └── ...
-```
+| What | `.exe` | Python |
+|---|---|---|
+| Main menu | Double-click | `python steamcast.py` |
+| Jump to PREP | `steamcast.exe prep` | `python steamcast.py prep` |
+| Jump to SETUP | `steamcast.exe setup` | `python steamcast.py setup` |
+| Jump to CAST | `steamcast.exe cast` | `python steamcast.py cast` |
 
 ---
 
-## CLI Usage
+## Steam Broadcast Spec Reference
 
-| Action | Standalone .exe | Python source |
-|--------|----------------|---------------|
-| Main menu | Double-click `steamcast.exe` | `python steamcast.py` |
-| Jump to Prep | `steamcast.exe prep` | `python steamcast.py prep` |
-| Jump to Setup | `steamcast.exe setup` | `python steamcast.py setup` |
-| Jump to Cast | `steamcast.exe cast` | `python steamcast.py cast` |
-
----
-
-## Steam Broadcast Spec
-
-| Parameter | Steam Requirement | SteamCast Setting |
-|-----------|-------------------|-------------------|
-| Video codec | H.264 | H.264 (NVENC, QSV, AMF, or libx264) |
-| Profile | High | High |
-| Level | 4.1 | 4.1 |
+| Parameter | Steam wants | SteamCast delivers |
+|---|---|---|
+| Video codec | H.264 High | H.264 High |
 | Resolution | 1920×1080 | 1920×1080 |
 | Frame rate | 30 or 60 FPS | 30 FPS |
-| Bitrate | 7000 kbps CBR | 5000 kbps CBR (`-b:v -maxrate -bufsize` all equal; `-rc cbr` for NVENC/AMF) |
-| Keyframe interval | 2 seconds | 2 seconds (60 frames @30fps) |
+| Bitrate | 7000 kbps CBR | 5000 kbps CBR |
+| Keyframe interval | 2 seconds | 2 seconds |
 | Pixel format | yuv420p | yuv420p |
 | Audio codec | AAC-LC | AAC-LC |
 | Audio bitrate | 128 kbps max | 128 kbps |
@@ -243,69 +136,74 @@ steamcast/
 
 ## Logging
 
-Every FFmpeg run writes a log to `logs/`:
+Every ffmpeg session writes to `logs/`:
 
 | Log | When |
-|-----|------|
+|---|---|
 | `{Game}_prep.log` | Single-file conversion |
 | `{Game}_part_prep.log` | Multi-part individual conversions |
 | `{Game}_concat.log` | Concatenation step |
-| `{Game}_cast.log` | Live stream output (RTMP key redacted on stop) |
-| `steamcast_crash.log` | Unhandled exception tracebacks (auto-created on crash) |
+| `{Game}_cast.log` | Live stream (RTMP key is redacted on stop) |
+| `steamcast_crash.log` | Unhandled exceptions |
 
-On failure, the last 10 lines are shown immediately. Full logs are preserved for debugging. If SteamCast crashes, check `logs/steamcast_crash.log` — it contains the full Python traceback.
+On failure, the last 10 lines are printed immediately. Full logs stick around for debugging.
 
 ---
 
-## Privacy & Security
+## Folder Layout
 
-- **No telemetry.** SteamCast does not collect, send, or report any usage data.
-- **No cloud.** All configuration (RTMP keys, game settings) stays in `config.json` on your machine.
-- **No network activity** except:
-  - One-time FFmpeg download on first run (gyan.dev)
-  - Optional version check at startup (GitHub, silently fails if offline)
-  - The actual RTMP stream you explicitly start
-- **RTMP keys are redacted** from stream log files after each session.
-- **config.json is gitignored** — never accidentally committed.
+```
+steamcast/
+├── steamcast.py
+├── config.json           ← your RTMP keys (local only, gitignored)
+├── input/                ← drop videos here
+├── output/               ← processed .mp4s appear here
+├── ffmpeg/               ← auto-downloaded portable FFmpeg
+├── logs/                 ← conversion + stream logs
+└── build/                ← PyInstaller spec + Windows build script
+```
+
+Everything auto-creates on first run.
 
 ---
 
 ## FAQ
 
-**Q: Do I need Python?**
-No — if you download the standalone `.exe` from [Releases](https://github.com/underagum/steamcast/releases/latest). It bundles Python, Rich, and psutil into a single 11 MB file. FFmpeg auto-downloads on first run. Double-click and go.
+**Do I need Python?**
+Not if you use the `.exe`. It bundles Python, Rich, and psutil into a single file. FFmpeg auto-downloads on first run.
 
-If you clone the source, you'll need Python 3.9+ and `pip install rich psutil`.
+**Can I broadcast multiple games at once?**
+Yes — each game gets its own ffmpeg process. Toggle them in the CAST menu.
 
-**Q: Can I broadcast multiple games at once?**
-Yes — each game gets its own FFmpeg process. Toggle them in the CAST menu.
+**Do I have to re-toggle games every time?**
+No. Your ON/OFF choices persist in `config.json` across sessions. Use `[T]` Toggle ALL to flip everything at once.
 
-**Q: Does it show per-process resource usage?**
-Yes. The cast dashboard shows per-stream CPU%, RAM (RSS in MB), and bitrate. The footer shows the total stream count + aggregate ffmpeg memory. The standalone `.exe` includes everything out of the box. Python users need `pip install psutil`.
+**Can I schedule a broadcast?**
+Yes. Type `SCH` in the CAST menu, give it a start and end datetime (`YYYYMMDD HH:MM`), and SteamCast handles the countdown and auto-stop. Ctrl+C cancels.
 
-**Q: Do I need to re-toggle games every time I start a broadcast?**
-No. Your ON/OFF choices in the CAST menu persist in `config.json` and survive across broadcasts and restarts. If you want a clean slate, use `[T]` Toggle ALL to flip everything OFF at once.
+**What if SteamCast crashes mid-broadcast?**
+An `atexit` handler cleans up orphaned ffmpeg processes. If that somehow fails, kill remaining `ffmpeg.exe` processes in Task Manager.
 
-**Q: Can I schedule a broadcast to start and stop automatically?**
-Yes. In the CAST menu, type `SCH` instead of `S`. You'll be prompted for a start datetime and end datetime in `YYYMMDD HH:MM` format (24h). SteamCast shows a confirmation with the formatted duration, then counts down before launching. Ctrl+C cancels the countdown. The broadcast stops automatically at the scheduled end time — or you can press Enter early.
+**Do you send my RTMP keys anywhere?**
+No telemetry. No cloud. Everything stays in `config.json` on your machine. Keys are redacted from log files after each session.
 
-**Q: What if SteamCast crashes while broadcasting?**
-v1.2.0+ automatically cleans up orphaned ffmpeg processes on crash via an `atexit` handler. If you were on an older version or the cleanup fails, use Task Manager to kill remaining `ffmpeg.exe` processes.
+**What if conversion fails?**
+The last 10 lines of the ffmpeg log are shown. The full log is in `logs/`.
 
-**Q: Do you send my RTMP keys anywhere?**
-No. Everything stays in `config.json` on your machine. Keys are redacted from logs.
+**My GPU doesn't support NVENC.**
+SteamCast probes NVENC → QSV → AMF → CPU fallback. If your NVENC driver is too old, it tells you exactly what's wrong and asks before switching to software encoding.
 
-**Q: What if the conversion fails?**
-The last 10 lines of the FFmpeg log are shown immediately. The full log is saved in `logs/`.
+**Does it check for updates?**
+At startup it pings GitHub. If there's a newer version, you'll see a notification. Fails silently if offline.
 
-**Q: My GPU doesn't support NVENC. Will it still work?**
-Yes. SteamCast probes NVIDIA NVENC, Intel QSV, and AMD AMF in that order. If none are found — or the NVENC driver is too old — it asks before falling back to `libx264` software encoding.
+---
 
-**Q: My NVENC driver is old. What do I do?**
-SteamCast now validates NVENC with a 1-frame test encode before accepting it. If your driver is too old (pre-610.00), it shows a clear message and asks whether to fall back to CPU encoding. To fix permanently: update your NVIDIA driver from [nvidia.com/download](https://www.nvidia.com/download/).
+## Privacy
 
-**Q: Does it check for updates?**
-On startup, SteamCast performs a quick version check against GitHub. If a newer version is available, it shows a notification. The check times out silently after 5 seconds if you're offline.
+- No telemetry, no analytics, no cloud
+- RTMP keys live in `config.json` and never leave your machine
+- Keys are redacted from stream logs
+- The only network activity is the FFmpeg download (one-time), the version check (optional, silent), and the RTMP streams you explicitly start
 
 ---
 
