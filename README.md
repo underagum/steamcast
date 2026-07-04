@@ -43,7 +43,15 @@ input/
 
 ### 3. Prep your videos
 
-From the menu, pick **PREP** (or run `python steamcast.py prep`). SteamCast detects your best encoder, converts everything to Steam spec, and writes ready-to-stream `.mp4` files to `output/`.
+From the menu, pick **PREP** (or run `python steamcast.py prep`). SteamCast detects your best encoder, then asks what bitrate you want:
+
+- **7000 kbps** — Steam's cap, excellent quality
+- **6000 kbps** — recommended, standard for live streaming
+- **5000 kbps** — good quality, current default
+- **4000 kbps** — lighter, mild artifacts on fast motion
+- **3500 kbps** — minimal, visible compression on action games
+
+Lower bitrate = less upload bandwidth needed. 8 streams at 5000k = 40 Mbps; at 3500k = 28 Mbps. Pick what your connection can handle, then SteamCast converts everything and writes ready-to-stream `.mp4` files to `output/`.
 
 ### 4. Add RTMP keys
 
@@ -64,9 +72,11 @@ While broadcasting, each game row shows health status and live stats:
 ```
 DreadOut 2          ● RUNNING   (01:23:45)   PID 18492   OK     CPU 12%  RAM 145MB  7.0Mbps
 DreadOut Remaster   ● RUNNING   (01:23:44)   PID 18501   SLOW   CPU 8%   RAM 132MB  6.8Mbps
+KOTD                ● RUNNING   (01:23:40)   PID 18512   CRIT   CPU 5%   RAM 140MB  5.0Mbps
 
-5 streams · 720 MB total ffmpeg memory
-⚠ Upload bandwidth saturated — 2 stream(s) behind real-time (slowest: 0.84x)
+8 streams · 850 MB total ffmpeg memory
+⚠ Upload bandwidth saturated — 3 stream(s) behind real-time (slowest: 0.84x)
+⚠ CRITICAL — Press Enter to stop cast, restart with fewer games
 ```
 
 | Column | What it means |

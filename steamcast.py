@@ -1123,7 +1123,38 @@ def show_prep_phase():
     if not ok:
         return
 
-    # Step 4: Process each game group
+    # Step 4: Choose bitrate
+    console.print()
+    console.print("[bold]Choose encoding bitrate:[/]")
+    console.print("  Steam's cap: [white]7000[/] kbps — excellent quality, heavy on bandwidth")
+    console.print("  Recommended:  [white]6000[/] kbps — great quality, standard for live streaming")
+    console.print("  Current:      [white]5000[/] kbps — good quality, your current default")
+    console.print("  Light:        [white]4000[/] kbps — acceptable, mild artifacts on fast motion")
+    console.print("  Minimum:      [white]3500[/] kbps — visible compression, not great for action games")
+    console.print()
+    console.print("[dim]Lower bitrate = less upload bandwidth needed during CAST.[/]")
+    console.print("[dim]8 streams at 5000k = 40 Mbps. 8 streams at 3500k = 28 Mbps.[/]")
+    console.print()
+
+    while True:
+        if RICH:
+            user_input = Prompt.ask("Bitrate (kbps)", default=SPEC.video_bitrate.replace("k", ""))
+        else:
+            user_input = input(f"Bitrate in kbps [{SPEC.video_bitrate.replace('k', '')}]: ").strip() or SPEC.video_bitrate.replace("k", "")
+        try:
+            bitrate_kbps = int(user_input)
+            if bitrate_kbps < 1000:
+                console.print("[red]Bitrate must be at least 1000 kbps.[/]")
+                continue
+            if bitrate_kbps > 7000:
+                console.print("[red]Bitrate exceeds Steam's 7000 kbps cap.[/]")
+                continue
+            SPEC.video_bitrate = f"{bitrate_kbps}k"
+            break
+        except ValueError:
+            console.print("[red]Enter a number (e.g. 5000).[/]")
+
+    # Step 5: Process each game group
     enc = detect_encoder(console)
     if enc is None:
         return  # User declined fallback after NVENC validation failure
@@ -2057,13 +2088,13 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
             if slow_streams:
                 worst = min(ss.get("speed", 1.0) for ss in stream_stats.values())
                 print(f"\033[K  \033[33m⚠ Upload bandwidth saturated — {len(slow_streams)} stream(s) behind real-time (slowest: {worst:.2f}x)\033[0m")
-                ranked = sorted(
-                    [(g, ss.get("speed", 1.0)) for g, ss in stream_stats.items() if ss.get("speed", 1.0) < 0.98],
-                    key=lambda x: x[1],
-                )[:3]
-                victims = ", ".join(f"{g} ({s:.2f}x)" for g, s in ranked)
-                print(f"\033[K  \033[2mTry stopping: {victims}\033[0m")
-            lines = len(active_streams) + 1 + (2 if slow_streams else 0)
+            has_critical = any(
+                ss.get("speed", 1.0) < 0.80 or ss.get("lag_s", 0) > 10
+                for ss in stream_stats.values()
+            )
+            if has_critical:
+                print(f"\033[K  \033[31m⚠ CRITICAL — Press Enter to stop cast, restart with fewer games\033[0m")
+            lines = len(active_streams) + 1 + (1 if slow_streams else 0) + (1 if has_critical else 0)
 
             print(f"\033[{lines}A", end="")
             time.sleep(2)
@@ -2159,13 +2190,15 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                     f"[#FF8C00 bold]⚠ Upload bandwidth saturated — {len(slow_streams)} "
                     f"stream(s) behind real-time (slowest: {worst:.2f}x)[/]"
                 )
-                # Suggest worst streams to kill
-                ranked = sorted(
-                    [(g, ss.get("speed", 1.0)) for g, ss in stream_stats.items() if ss.get("speed", 1.0) < 0.98],
-                    key=lambda x: x[1],
-                )[:3]
-                victims = ", ".join(f"[#FF8C00]{g} ({s:.2f}x)[/]" for g, s in ranked)
-                table.add_row(f"[dim]Try stopping: {victims}[/]")
+            # Critical: any stream below 0.80x or lag > 10s → prompt to stop
+            has_critical = any(
+                ss.get("speed", 1.0) < 0.80 or ss.get("lag_s", 0) > 10
+                for ss in stream_stats.values()
+            )
+            if has_critical:
+                table.add_row(
+                    "[red bold]⚠ CRITICAL — Press Enter to stop cast, restart with fewer games[/]"
+                )
 
             return table
 
