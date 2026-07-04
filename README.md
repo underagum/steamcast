@@ -1,8 +1,8 @@
 # SteamCast
 
-> Put your game trailers on your Steam store pages — 24/7, no OBS, no server, no fuss.
+> Put your game trailers on your Steam store pages. 24/7. No OBS, no server, no fuss.
 
-SteamCast is a lightweight broadcasting tool for game developers and publishers who want looping video on their Steam store during sales, festivals, or just because it looks good. **Download the `.exe`, drop in your videos, paste your RTMP keys, and you're live.** Near-zero CPU overhead because it uses `-c copy` — no re-encoding at broadcast time.
+SteamCast is a lightweight broadcasting tool for game developers and publishers who want looping video on their Steam store during sales, festivals, or just because it looks good. **Download the `.exe`, drop in your videos, paste your RTMP keys, and you're live.** Near-zero CPU overhead because it uses `-c copy`. No re-encoding at broadcast time.
 
 ---
 
@@ -13,7 +13,7 @@ Two simple phases:
 | Phase | What happens |
 |---|---|
 | **PREP** | Converts your videos to Steam's broadcast spec (H.264, AAC, 1080p30, 5 Mbps CBR). Merges multi-part videos per game. One clean `.mp4` per title, ready to go. |
-| **CAST** | Pick which games to broadcast, toggle them on/off, and start streaming — either immediately or on a schedule. A live dashboard shows per-stream CPU%, memory (RSS), and real-time bitrate. |
+| **CAST** | Pick which games to broadcast, toggle them on/off, and start streaming. Either right now or on a schedule. A live dashboard shows per-stream CPU%, memory (RSS), and real-time bitrate. |
 
 ---
 
@@ -47,7 +47,7 @@ From the menu, pick **PREP** (or run `python steamcast.py prep`). SteamCast dete
 
 ### 4. Add RTMP keys
 
-Pick **Setup** (or `python steamcast.py setup`). Paste the RTMP key from [Steamworks](https://partner.steamgames.com) for each game. Keys stay in `config.json` on your machine — nothing leaves.
+Pick **Setup** (or `python steamcast.py setup`). Paste the RTMP key from [Steamworks](https://partner.steamgames.com) for each game. Keys stay in `config.json` on your machine. Nothing leaves.
 
 > **Heads up:** Make sure the Steam account that owns each RTMP key is whitelisted in Steamworks → Store Page → Broadcast Settings. If the whitelist isn't published, Steam will boot the stream after a couple minutes.
 
@@ -72,7 +72,7 @@ DreadOut Remaster   ● RUNNING   (01:23:44)   PID 18501   CPU 8%   RAM 132MB  6
 |---|---|
 | **CPU%** | That ffmpeg process's CPU usage |
 | **RAM** | Resident memory (RSS) in MB |
-| **Bitrate** | Actual data rate being pushed to Steam, pulled from ffmpeg output |
+| **Bitrate** | Data rate going to Steam, read from ffmpeg output |
 
 CPU turns yellow at 50%, red at 85%.
 
@@ -80,7 +80,7 @@ CPU turns yellow at 50%, red at 85%.
 
 ## GPU Encoding (PREP only)
 
-During PREP, SteamCast picks the best hardware encoder available. CAST uses `-c copy` — no encoding happens at broadcast time, so this only matters for the one-time conversion step.
+During PREP, SteamCast picks the best hardware encoder available. CAST uses `-c copy`. No encoding happens at broadcast time, so this only matters for the one-time conversion step.
 
 | Priority | Encoder | What you need |
 |---|---|---|
@@ -95,15 +95,15 @@ NVENC gets a 1-frame test encode to verify the driver actually works. If your dr
 
 ## How It Starts Up
 
-Every launch runs a silent health check so you don't have to think about it:
+Every time SteamCast starts, it checks a few things in the background:
 
-- **FFmpeg** — found in the bundled `ffmpeg/` folder, or on your system PATH, or auto-downloaded from gyan.dev
-- **Encoder** — probed and validated (NVENC gets a test encode to catch driver issues)
-- **Config** — checked for corruption on every load; broken entries are silently removed
-- **Version** — quick ping to GitHub; if there's a newer release, you get a notification
-- **Crashes** — unhandled errors are caught and written to `logs/steamcast_crash.log` with the full traceback
+- **FFmpeg:** found in the bundled `ffmpeg/` folder, on your system PATH, or auto-downloaded from gyan.dev
+- **Encoder:** probed and validated. NVENC gets a test encode to catch driver issues
+- **Config:** checked for corruption on every load. Broken entries are silently removed
+- **Version:** quick ping to GitHub. If there's a newer release, you get a notification
+- **Crashes:** unhandled errors are caught and written to `logs/steamcast_crash.log` with the full traceback
 
-None of this requires your attention unless something actually breaks.
+If something breaks, SteamCast tells you. Otherwise, none of this is visible.
 
 ---
 
@@ -146,7 +146,7 @@ Every ffmpeg session writes to `logs/`:
 | `{Game}_cast.log` | Live stream (RTMP key is redacted on stop) |
 | `steamcast_crash.log` | Unhandled exceptions |
 
-On failure, the last 10 lines are printed immediately. Full logs stick around for debugging.
+On failure, the last 10 lines are printed immediately. Full logs are saved for debugging.
 
 ---
 
@@ -163,7 +163,7 @@ steamcast/
 └── build/                ← PyInstaller spec + Windows build script
 ```
 
-Everything auto-creates on first run.
+All of this is created on first run.
 
 ---
 
@@ -173,7 +173,7 @@ Everything auto-creates on first run.
 Not if you use the `.exe`. It bundles Python, Rich, and psutil into a single file. FFmpeg auto-downloads on first run.
 
 **Can I broadcast multiple games at once?**
-Yes — each game gets its own ffmpeg process. Toggle them in the CAST menu.
+Yes. Each game gets its own ffmpeg process. Toggle them in the CAST menu.
 
 **Do I have to re-toggle games every time?**
 No. Your ON/OFF choices persist in `config.json` across sessions. Use `[T]` Toggle ALL to flip everything at once.
@@ -209,4 +209,4 @@ At startup it pings GitHub. If there's a newer version, you'll see a notificatio
 
 ## License
 
-MIT — free to use, modify, and share.
+MIT. Free to use, modify, and share.
