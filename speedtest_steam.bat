@@ -23,7 +23,7 @@ try { ^
     $s.Write($d, 0, $d.Length); ^
     $b += $d.Length; ^
     $elapsed = [math]::Round($t.Elapsed.TotalSeconds, 0); ^
-    if ($elapsed -ne $last -and $elapsed % 10 -eq 0) { ^
+    if ($elapsed -ne $last -and $elapsed %% 10 -eq 0) { ^
       $current = [math]::Round(($b * 8) / $t.Elapsed.TotalSeconds / 1048576, 1); ^
       Write-Host ('  {0}s  -  {1} Mbps  ({2} MB sent)' -f $elapsed, $current, [math]::Round($b / 1048576, 1)); ^
       $last = $elapsed; ^
