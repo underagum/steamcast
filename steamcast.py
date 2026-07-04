@@ -186,6 +186,76 @@ def _read_log_bitrate(log_path: Path) -> str:
     return "—"
 
 
+def _read_log_speed(log_path: Path) -> float:
+    """Read last 8 KB of ffmpeg log to find latest ``speed=`` value.
+
+    Returns 1.0 (real-time) if no speed line found — safe default for a
+    freshly-started stream with no speed history yet.
+    """
+    try:
+        with open(log_path, "r", errors="replace") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            if size == 0:
+                return 1.0
+            chunk_start = max(0, size - 8192)
+            f.seek(chunk_start)
+            new_data = f.read()
+    except (OSError, ValueError):
+        return 1.0
+
+    for line in reversed(new_data.splitlines()):
+        m = re.search(r"speed=\s*([\d.]+)x", line)
+        if m:
+            return float(m.group(1))
+    return 1.0
+
+
+def _read_log_lag(log_path: Path) -> float:
+    """Read last 8 KB of ffmpeg log to find latest ``lag of Ns`` value.
+
+    Returns 0.0 if no lag line found.
+    """
+    try:
+        with open(log_path, "r", errors="replace") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            if size == 0:
+                return 0.0
+            chunk_start = max(0, size - 8192)
+            f.seek(chunk_start)
+            new_data = f.read()
+    except (OSError, ValueError):
+        return 0.0
+
+    for line in reversed(new_data.splitlines()):
+        m = re.search(r"lag of ([\d.]+)s", line)
+        if m:
+            return float(m.group(1))
+    return 0.0
+
+
+def _stream_health(speed: float, lag_s: float) -> tuple[str, str]:
+    """Return (rich_color, label) for stream health.
+
+    Thresholds match OBS-style detection:
+      speed >= 0.98  → green   (healthy)
+      0.90 .. 0.98   → yellow  (minor congestion)
+      0.80 .. 0.90   → orange  (congested, frames backing up)
+      speed < 0.80   → red     (critical, falling behind)
+    Lag over 10s forces red regardless of speed.
+    """
+    if lag_s > 10:
+        return ("red", f"LAG {lag_s:.0f}s")
+    if speed >= 0.98:
+        return ("green", "OK")
+    if speed >= 0.90:
+        return ("yellow", f"SLOW {speed:.2f}x")
+    if speed >= 0.80:
+        return ("#FF8C00", f"CONG {speed:.2f}x")
+    return ("red", f"CRIT {speed:.2f}x")
+
+
 def get_per_stream_stats(active_streams: dict) -> dict:
     """Return per-stream {gname: {cpu, mem_mb, bitrate}}. Empty if psutil missing."""
     if not _PSUTIL:
@@ -218,7 +288,12 @@ def get_per_stream_stats(active_streams: dict) -> dict:
         # ── Bitrate from ffmpeg stderr log ──
         bitrate = _read_log_bitrate(stream["log_file"])
 
-        result[gname] = {"cpu": cpu, "mem_mb": mem_mb, "bitrate": bitrate}
+        # ── Stream health from ffmpeg speed + lag ──
+        speed = _read_log_speed(stream["log_file"])
+        lag_s = _read_log_lag(stream["log_file"])
+
+        result[gname] = {"cpu": cpu, "mem_mb": mem_mb, "bitrate": bitrate,
+                          "speed": speed, "lag_s": lag_s}
 
     # Prune dead PIDs from cache
     live_pids = {s["process"].pid for s in active_streams.values() if s["process"].poll() is None}
@@ -1940,7 +2015,16 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                     mem_val = ss.get("mem_mb", 0)
                     bitrate_val = ss.get("bitrate", "—")
                     cpu_color = "\033[33m" if cpu_val > 50 else "\033[32m"
-                    detail = f"  CPU {cpu_color}{cpu_val:.0f}%\033[0m  RAM {mem_val:.0f}MB  {bitrate_val}"
+                    speed_val = ss.get("speed", 1.0)
+                    lag_val = ss.get("lag_s", 0.0)
+                    health_color, health_label = _stream_health(speed_val, lag_val)
+                    if health_color == "red":
+                        health_ansi = "\033[31m"
+                    elif health_color in ("yellow", "#FF8C00"):
+                        health_ansi = "\033[33m"
+                    else:
+                        health_ansi = "\033[32m"
+                    detail = f"  {health_ansi}{health_label}\033[0m  CPU {cpu_color}{cpu_val:.0f}%\033[0m  RAM {mem_val:.0f}MB  {bitrate_val}"
                 else:
                     detail = ""
 
@@ -1964,7 +2048,16 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
             live = sum(1 for s in active_streams.values() if s["process"].poll() is None)
             total_mem = sum(ss.get("mem_mb", 0) for ss in stream_stats.values())
             print(f"\033[K  {live} streams  {total_mem:.0f} MB RAM")
-            lines = len(active_streams) + 1
+
+            # Bandwidth bottleneck warning
+            slow_streams = [
+                g for g, ss in stream_stats.items()
+                if ss.get("speed", 1.0) < 0.98
+            ]
+            if slow_streams:
+                worst = min(ss.get("speed", 1.0) for ss in stream_stats.values())
+                print(f"\033[K  \033[33m⚠ Upload bandwidth saturated — {len(slow_streams)} stream(s) behind real-time (slowest: {worst:.2f}x)\033[0m")
+            lines = len(active_streams) + 1 + (1 if slow_streams else 0)
 
             print(f"\033[{lines}A", end="")
             time.sleep(2)
@@ -1995,10 +2088,14 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                         cpu_val = ss.get("cpu", 0)
                         mem_val = ss.get("mem_mb", 0)
                         bitrate_val = ss.get("bitrate", "—")
+                        speed_val = ss.get("speed", 1.0)
+                        lag_val = ss.get("lag_s", 0.0)
                         cpu_str = f"[dim]{cpu_val:.0f}%[/]" if cpu_val < 50 else f"[yellow]{cpu_val:.0f}%[/]"
                         mem_str = f"[dim]{mem_val:.0f}MB[/]"
                         bitrate_str = f"[dim]{bitrate_val}[/]"
-                        detail = f"  CPU {cpu_str}  RAM {mem_str}  {bitrate_str}"
+                        health_color, health_label = _stream_health(speed_val, lag_val)
+                        health_str = f"[{health_color}]{health_label}[/]"
+                        detail = f"  {health_str}  CPU {cpu_str}  RAM {mem_str}  {bitrate_str}"
                     else:
                         detail = ""
                 else:
@@ -2039,11 +2136,23 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                             f"[red dim]{err[:120]}[/]",
                         )
 
-            # Summary: stream count + total ffmpeg RAM
+            # Summary: stream count + total ffmpeg RAM + bandwidth warning
             live = sum(1 for s in active_streams.values() if s["process"].poll() is None)
             total_mem = sum(ss.get("mem_mb", 0) for ss in stream_stats.values())
             table.add_row("")  # spacer
             table.add_row(f"[dim]{live} streams  {total_mem:.0f} MB RAM[/]")
+
+            # Bandwidth bottleneck warning — any stream below 0.98x is congested
+            slow_streams = [
+                gname for gname, ss in stream_stats.items()
+                if ss.get("speed", 1.0) < 0.98
+            ]
+            if slow_streams:
+                worst = min(ss.get("speed", 1.0) for ss in stream_stats.values())
+                table.add_row(
+                    f"[#FF8C00 bold]⚠ Upload bandwidth saturated — {len(slow_streams)} "
+                    f"stream(s) behind real-time (slowest: {worst:.2f}x)[/]"
+                )
 
             return table
 

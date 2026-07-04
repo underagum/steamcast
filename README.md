@@ -1,6 +1,6 @@
 # SteamCast
 
-> Put your game trailers on your Steam store pages. 24/7. No OBS, no server, no fuss.
+> Put your game videos on your Steam store pages. 24/7. No OBS, no server, no fuss.
 
 SteamCast is a lightweight broadcasting tool for game developers and publishers who want looping video on their Steam store during sales, festivals, or just because it looks good. **Download the `.exe`, drop in your videos, paste your RTMP keys, and you're live.** Near-zero CPU overhead because it uses `-c copy`. No re-encoding at broadcast time.
 
@@ -59,22 +59,24 @@ Pick **CAST** (or `python steamcast.py cast`). Toggle games on/off, then hit **S
 
 ## The Dashboard
 
-While broadcasting, each game row shows its own live stats:
+While broadcasting, each game row shows health status and live stats:
 
 ```
-DreadOut 2          ● RUNNING   (01:23:45)   PID 18492   CPU 12%  RAM 145MB  7.0Mbps
-DreadOut Remaster   ● RUNNING   (01:23:44)   PID 18501   CPU 8%   RAM 132MB  6.8Mbps
+DreadOut 2          ● RUNNING   (01:23:45)   PID 18492   OK     CPU 12%  RAM 145MB  7.0Mbps
+DreadOut Remaster   ● RUNNING   (01:23:44)   PID 18501   SLOW   CPU 8%   RAM 132MB  6.8Mbps
 
 5 streams · 720 MB total ffmpeg memory
+⚠ Upload bandwidth saturated — 2 stream(s) behind real-time (slowest: 0.84x)
 ```
 
 | Column | What it means |
 |---|---|
+| **Health** | `OK` (green), `SLOW` (yellow, minor congestion), `CONG` (orange, backing up), `CRIT`/`LAG` (red, falling behind). Detected from ffmpeg's `speed=` and lag metrics — same principle as OBS dropped frames. |
 | **CPU%** | That ffmpeg process's CPU usage |
 | **RAM** | Resident memory (RSS) in MB |
 | **Bitrate** | Data rate going to Steam, read from ffmpeg output |
 
-CPU turns yellow at 50%, red at 85%.
+CPU turns yellow at 50%, red at 85%. A bandwidth warning appears in the footer whenever any stream drops below 0.98x real-time speed.
 
 ---
 
@@ -174,6 +176,9 @@ Not if you use the `.exe`. It bundles Python, Rich, and psutil into a single fil
 
 **Can I broadcast multiple games at once?**
 Yes. Each game gets its own ffmpeg process. Toggle them in the CAST menu.
+
+**My streams show SLOW/CONG/CRIT in the dashboard. What's wrong?**
+Your upload bandwidth is saturated. The dashboard detects this from ffmpeg's `speed=` metric — same principle as OBS dropped frames. SteamCast shows per-stream health (green/yellow/orange/red) and a footer warning when any stream falls behind. Fix: run fewer concurrent streams, or lower the PREP bitrate. 8 streams at 5 Mbps = 40 Mbps continuous. Most home connections can't sustain that.
 
 **Do I have to re-toggle games every time?**
 No. Your ON/OFF choices persist in `config.json` across sessions. Use `[T]` Toggle ALL to flip everything at once.
