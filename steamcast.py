@@ -2057,7 +2057,13 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
             if slow_streams:
                 worst = min(ss.get("speed", 1.0) for ss in stream_stats.values())
                 print(f"\033[K  \033[33m⚠ Upload bandwidth saturated — {len(slow_streams)} stream(s) behind real-time (slowest: {worst:.2f}x)\033[0m")
-            lines = len(active_streams) + 1 + (1 if slow_streams else 0)
+                ranked = sorted(
+                    [(g, ss.get("speed", 1.0)) for g, ss in stream_stats.items() if ss.get("speed", 1.0) < 0.98],
+                    key=lambda x: x[1],
+                )[:3]
+                victims = ", ".join(f"{g} ({s:.2f}x)" for g, s in ranked)
+                print(f"\033[K  \033[2mTry stopping: {victims}\033[0m")
+            lines = len(active_streams) + 1 + (2 if slow_streams else 0)
 
             print(f"\033[{lines}A", end="")
             time.sleep(2)
@@ -2153,6 +2159,13 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                     f"[#FF8C00 bold]⚠ Upload bandwidth saturated — {len(slow_streams)} "
                     f"stream(s) behind real-time (slowest: {worst:.2f}x)[/]"
                 )
+                # Suggest worst streams to kill
+                ranked = sorted(
+                    [(g, ss.get("speed", 1.0)) for g, ss in stream_stats.items() if ss.get("speed", 1.0) < 0.98],
+                    key=lambda x: x[1],
+                )[:3]
+                victims = ", ".join(f"[#FF8C00]{g} ({s:.2f}x)[/]" for g, s in ranked)
+                table.add_row(f"[dim]Try stopping: {victims}[/]")
 
             return table
 
