@@ -40,6 +40,7 @@ print()
 ping_times = []
 sent = PING_COUNT
 recv = 0
+icmp_blocked = False
 
 try:
     result = subprocess.run(
@@ -61,15 +62,50 @@ try:
     sent_match = re.search(r'(\d+)\s+packets?\s+transmitted', result.stdout)
     if sent_match:
         sent = int(sent_match.group(1))
+
+    # ICMP fully blocked — all 0
+    if recv == 0 and sent == PING_COUNT:
+        icmp_blocked = True
 except (subprocess.TimeoutExpired, FileNotFoundError) as e:
     print(c(f"  ping failed: {e}", 1))
     ping_times = []
     recv = 0
+    icmp_blocked = True
+
+# ── TCP fallback for ICMP-blocked networks ──
+tcp_fallback = False
+if icmp_blocked:
+    print(c("  [FALLBACK] ICMP blocked. Measuring TCP connect latency (20 rapid connects)...", 2))
+
+    tcp_rtts = []
+    tcp_fails = 0
+    tcp_samples = 20
+
+    for _ in range(tcp_samples):
+        t0 = time.monotonic()
+        try:
+            sock_tcp = socket.create_connection((ENDPOINT, PORT), timeout=5)
+            rtt = (time.monotonic() - t0) * 1000
+            tcp_rtts.append(rtt)
+            sock_tcp.close()
+        except OSError:
+            tcp_fails += 1
+
+    if len(tcp_rtts) >= 2:
+        ping_times = tcp_rtts
+        recv = len(tcp_rtts)
+        sent = tcp_samples
+        loss_pct = round(tcp_fails / tcp_samples * 100, 1)
+        tcp_fallback = True
+        print(c("  Measured TCP SYN-SYN/ACK RTT (lower bound).", 5))
+    else:
+        loss_pct = 100
+else:
+    loss_pct = round((sent - recv) / sent * 100, 1) if sent > 0 else 100
 
 ping_min = ping_avg = ping_max = 0.0
 jitter = ping_stdev = 0.0
 
-loss_pct = round((sent - recv) / sent * 100, 1) if sent > 0 else 100
 loss_color = 1 if loss_pct > 5 else 4
 print(f"  Packets: {recv}/{sent} received  ({c(f'{loss_pct}% loss', loss_color)})")
 

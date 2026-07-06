@@ -18,12 +18,14 @@ Write-Host ""
 <#
   .SYNOPSIS
     Phase 1: Packet Loss, Latency, Jitter
+    Tries ICMP first; falls back to TCP connect timing if ICMP is blocked (Starlink).
 #>
 Write-Host "=== Phase 1: Latency + Packet Loss + Jitter ===" -ForegroundColor Cyan
 Write-Host "Pinging $Target ($PingCount samples)..."
 Write-Host ""
 
 $ping = Test-Connection -ComputerName $Target -Count $PingCount -ErrorAction SilentlyContinue
+$icmpBlocked = $false
 
 if (-not $ping) {
     Write-Host "  [WARN] ICMP ping blocked or host unreachable." -ForegroundColor Yellow
@@ -41,9 +43,7 @@ if (-not $ping) {
         }
     } else {
         Write-Host "  ping.exe also failed - ICMP fully blocked." -ForegroundColor Red
-        $times = @()
-        $recv = 0
-        $sent = $PingCount
+        $icmpBlocked = $true
     }
 } else {
     $times = $ping | Where-Object { $_.StatusCode -eq 0 } | ForEach-Object { $_.ResponseTime }
@@ -51,11 +51,45 @@ if (-not $ping) {
     $sent = $ping.Count
 }
 
-$lossPct = if ($sent -gt 0) { [math]::Round(($sent - $recv) / $sent * 100, 1) } else { 100 }
-$lossColor = if ($lossPct -gt 5) { "Red" } else { "Green" }
+# ── TCP fallback for ICMP-blocked networks ──
+if ($icmpBlocked) {
+    Write-Host "  [FALLBACK] Measuring TCP connect latency (20 rapid connects)..." -ForegroundColor Yellow
+
+    $tcpRtts = @()
+    $tcpFails = 0
+    $tcpSamples = 20
+
+    for ($i = 0; $i -lt $tcpSamples; $i++) {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            $tc = New-Object System.Net.Sockets.TcpClient
+            $tc.Connect($Target, $Port)
+            $sw.Stop()
+            $tcpRtts += $sw.ElapsedMilliseconds
+            $tc.Close()
+        } catch {
+            $tcpFails++
+        }
+    }
+
+    $times = $tcpRtts
+    $recv = $tcpRtts.Count
+    $sent = $tcpSamples
+
+    if ($tcpRtts.Count -ge 2) {
+        Write-Host "  Measured TCP SYN-SYN/ACK RTT. Lower bound = network latency+Starlink processing." -ForegroundColor Gray
+        $lossPct = [math]::Round($tcpFails / $tcpSamples * 100, 1)
+    } else {
+        $lossPct = 100
+    }
+} else {
+    $lossPct = if ($sent -gt 0) { [math]::Round(($sent - $recv) / $sent * 100, 1) } else { 100 }
+}
+
+$lossColor = if ($lossPct -gt 5) { "Red" } elseif ($lossPct -gt 0) { "Yellow" } else { "Green" }
 
 Write-Host ""
-Write-Host "  Packets: $recv/$sent received  ($lossPct% loss)" -ForegroundColor $lossColor
+Write-Host "  Connectivity: $recv/$sent successful  ($lossPct% failure)" -ForegroundColor $lossColor
 
 if ($times.Count -ge 2) {
     $min = [math]::Round(($times | Measure-Object -Minimum).Minimum, 0)
@@ -94,7 +128,7 @@ if ($times.Count -ge 2) {
     Write-Host "  Live Readiness: $score/100" -ForegroundColor $scoreColor
     Write-Host "  Rating: $scoreLabel" -ForegroundColor $scoreColor
 } else {
-    Write-Host "  Latency:  N/A (no successful pings)" -ForegroundColor Red
+    Write-Host "  Latency:  N/A (no successful connections)" -ForegroundColor Red
     Write-Host "  Live Readiness: 0/100 - cannot measure" -ForegroundColor Red
     $jitter = 0
 }
