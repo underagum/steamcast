@@ -41,7 +41,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 if getattr(sys, 'frozen', False):
     ROOT_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1721,7 +1721,17 @@ def show_cast():
                     input("\nPress Enter to continue...")
                 continue
 
-            run_cast_stream(to_start)
+            # ── Auto-restart interval prompt ──
+            if RICH:
+                restart_str = Prompt.ask("[magenta]Auto-restart every N hours? (0=off)[/]", default="4").strip()
+            else:
+                restart_str = input("Auto-restart every N hours? (0=off, default 4): ").strip()
+            try:
+                restart_every = float(restart_str) if restart_str else 4.0
+            except ValueError:
+                restart_every = 0.0
+
+            run_cast_stream(to_start, restart_every_hours=restart_every)
             return
         elif choice == "sch":
             # Scheduled broadcast
@@ -1818,7 +1828,17 @@ def show_cast():
             if not confirm:
                 continue
 
-            run_cast_stream(to_start, delay_minutes=delay_minutes, duration_hours=duration_hours)
+            # ── Auto-restart interval for scheduled broadcast ──
+            if RICH:
+                sch_restart_str = Prompt.ask("[magenta]Auto-restart every N hours? (0=off)[/]", default="4").strip()
+            else:
+                sch_restart_str = input("Auto-restart every N hours? (0=off, default 4): ").strip()
+            try:
+                sch_restart_every = float(sch_restart_str) if sch_restart_str else 4.0
+            except ValueError:
+                sch_restart_every = 0.0
+
+            run_cast_stream(to_start, delay_minutes=delay_minutes, duration_hours=duration_hours, restart_every_hours=sch_restart_every)
             return
         else:
             # Try number input
@@ -1838,12 +1858,14 @@ def show_cast():
                 pass
 
 
-def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: float = 0):
+def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: float = 0, restart_every_hours: float = 0):
     """Start streaming selected games and monitor.
 
     If *delay_minutes* > 0, shows a countdown and waits before starting.
     If *duration_hours* > 0, automatically stops all streams after that
-    many hours (from the time the streams actually start)."""
+    many hours (from the time the streams actually start).
+    If *restart_every_hours* > 0, automatically restarts all streams after
+    that many hours (to combat ffmpeg drift)."""
     banner()
     console.print("[bold red]=== 🔴 STARTING BROADCAST ===[/]\n")
 
@@ -1876,6 +1898,17 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                 f"[cyan]           will auto-stop at [white]{end_fmt}[/] "
                 f"[dim]({dur_fmt} from start)[/]"
             )
+        if restart_every_hours > 0:
+            rest_d = int(restart_every_hours // 24)
+            rest_h = int(restart_every_hours % 24)
+            rest_parts = []
+            if rest_d > 0:
+                rest_parts.append(f"{rest_d}d")
+            if rest_h > 0 or rest_d > 0:
+                rest_parts.append(f"{rest_h}h")
+            console.print(
+                f"[magenta]♻ auto-restarts every[/] [white]{' '.join(rest_parts)}[/]"
+            )
         console.print()
 
         remaining = delay_minutes * 60
@@ -1892,6 +1925,16 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
             console.print("\n[yellow]Scheduled broadcast cancelled.[/]")
             return
         console.print("\n[bold green]Starting now![/]\n")
+
+    if restart_every_hours > 0 and delay_minutes == 0:
+        rest_d = int(restart_every_hours // 24)
+        rest_h = int(restart_every_hours % 24)
+        rest_parts = []
+        if rest_d > 0:
+            rest_parts.append(f"{rest_d}d")
+        if rest_h > 0 or rest_d > 0:
+            rest_parts.append(f"{rest_h}h")
+        console.print(f"[magenta]♻ auto-restarts every[/] [white]{' '.join(rest_parts)}[/]\n")
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     active_streams = {}
@@ -2013,11 +2056,30 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
 
         Thread(target=key_listener, daemon=True).start()
 
+        _next_restart_at = None
         while running:
             if auto_stop_at and datetime.now() >= auto_stop_at:
                 console.print("\n[yellow]Scheduled stop time reached.[/]")
                 running = False
                 continue
+
+            # ── Auto-restart ──
+            if restart_every_hours > 0:
+                if _next_restart_at is None:
+                    _next_restart_at = datetime.now() + timedelta(hours=restart_every_hours)
+                elif datetime.now() >= _next_restart_at:
+                    print("\033[K  \033[33m♻ Auto-restart triggered — killing all streams...\033[0m")
+                    for gname in list(active_streams):
+                        stream = active_streams[gname]
+                        proc = stream["process"]
+                        if proc.poll() is None:
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=3)
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
+                    _next_restart_at = datetime.now() + timedelta(hours=restart_every_hours)
+                    print("\033[K  \033[33m♻ All killed — reconnect will pick them up\033[0m")
 
             # ── Auto-reconnect dead streams ──
             for gname in list(active_streams):
@@ -2214,6 +2276,7 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
 
         threading.Thread(target=key_listener, daemon=True).start()
 
+        _next_restart_at = None
         try:
             with Live(generate_table(), refresh_per_second=2, console=console) as live:
                 while running:
@@ -2221,6 +2284,24 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
                         console.print("\n[yellow]Scheduled stop time reached.[/]")
                         running = False
                         continue
+
+                    # ── Auto-restart ──
+                    if restart_every_hours > 0:
+                        if _next_restart_at is None:
+                            _next_restart_at = datetime.now() + timedelta(hours=restart_every_hours)
+                        elif datetime.now() >= _next_restart_at:
+                            console.print("\n[magenta]♻ Auto-restart triggered — killing all streams...[/]")
+                            for gname in list(active_streams):
+                                stream = active_streams[gname]
+                                proc = stream["process"]
+                                if proc.poll() is None:
+                                    proc.terminate()
+                                    try:
+                                        proc.wait(timeout=3)
+                                    except subprocess.TimeoutExpired:
+                                        proc.kill()
+                            _next_restart_at = datetime.now() + timedelta(hours=restart_every_hours)
+                            console.print("[magenta]♻ All killed — reconnect will pick them up[/]")
 
                     # ── Auto-reconnect dead streams ──
                     for gname in list(active_streams):

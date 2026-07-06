@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.4.0 — 2026-07-05
+
+### Added
+
+- **Auto-restart every N hours.** New `restart_every_hours` parameter on `run_cast_stream()`. Kills all ffmpeg streams every N hours — the auto-reconnect loop respawns them cleanly. Default 4 hours in the interactive prompt ([S] and [SCH] menus both ask). Banner shows "♻ auto-restarts every 4h" on cast start. Works in both Rich and plain-text monitor loops. Set to 0 to disable.
+
 ## v1.3.0 — 2026-07-03
 
 ### Added
