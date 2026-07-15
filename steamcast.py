@@ -2537,6 +2537,10 @@ def main():
 
         if cmd == "prep":
             show_prep_phase()
+        elif cmd == "daemon":
+            _cmd_daemon()
+        elif cmd == "attach":
+            _cmd_attach()
         elif cmd == "setup":
             show_cast_setup()
         elif cmd == "cast":
@@ -2545,6 +2549,51 @@ def main():
             show_main_menu()
     else:
         show_main_menu()
+
+
+def _cmd_daemon():
+    """Handle 'steamcast daemon start|stop|status'."""
+    from daemon import cmd_start, cmd_stop, cmd_status, load_config, json, DaemonError
+
+    sub = sys.argv[2].lower() if len(sys.argv) > 2 else "status"
+
+    if sub == "start":
+        config = load_config()
+        print("Starting SteamCast daemon...")
+        cmd_start(config)
+    elif sub == "stop":
+        cmd_stop()
+    elif sub == "status":
+        st = cmd_status()
+        if st.get("running"):
+            pid = st.get("pid", "?")
+            uptime = st.get("uptime", "?")
+            print(f"🔵 Daemon is running (PID {pid}, uptime {uptime})")
+            print()
+            streams = st.get("streams", [])
+            if streams:
+                print(f"  {'Game':<25} {'Status':<10} {'Bitrate':<10}")
+                print(f"  {'─'*24} {'─'*9} {'─'*9}")
+                for s in streams:
+                    name = s.get("name", "?")[:24]
+                    sts = s.get("status", "?")
+                    bit = s.get("bitrate", "?")
+                    icon = "🟢" if sts == "LIVE" else ("🔴" if sts == "DEAD" else "⚪")
+                    print(f"  {name:<25} {icon} {sts:<7} {bit:<10}")
+            else:
+                print("  No active streams.")
+        else:
+            print("⚪ Daemon is not running.")
+            print("   Use: steamcast daemon start")
+    else:
+        print(f"Unknown daemon subcommand: {sub}")
+        print("Usage: steamcast daemon {start|stop|status}")
+
+
+def _cmd_attach():
+    """Handle 'steamcast attach'."""
+    from attach import attach as _attach
+    _attach()
 
 
 if __name__ == "__main__":
