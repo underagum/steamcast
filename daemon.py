@@ -564,14 +564,69 @@ def cmd_status() -> dict:
 
 
 def load_config() -> dict:
-    """Load daemon config from ~/.steamcast/config.json."""
-    cfg_path = STEAMCAST_DIR / "config.json"
-    if cfg_path.exists():
+    """Load daemon config, merging TUI config with daemon overrides.
+
+    Reads:
+      1. ~/projects/steamcast/config.json  (TUI — game names + RTMP keys)
+      2. ~/.steamcast/config.json           (override — restart_every, duration, extra games)
+
+    Auto-discovers video files from ~/projects/steamcast/output/<name>.mp4.
+    Only active games from the TUI config are included.
+    """
+    config: dict = {"games": [], "restart_every_hours": 4, "duration_hours": 0}
+
+    # 1. Load TUI config
+    tui_cfg_path = Path.home() / "projects" / "steamcast" / "config.json"
+    tui_games: dict = {}
+    if tui_cfg_path.exists():
         try:
-            return json.loads(cfg_path.read_text())
+            tui_cfg = json.loads(tui_cfg_path.read_text())
+            tui_games = tui_cfg.get("games", {})
         except (json.JSONDecodeError, OSError):
-            logger.warning("Could not parse %s, using defaults", cfg_path)
-    return {}
+            logger.warning("Could not parse %s, skipping", tui_cfg_path)
+
+    # 2. Load daemon overrides
+    daemon_cfg_path = STEAMCAST_DIR / "config.json"
+    if daemon_cfg_path.exists():
+        try:
+            dm_cfg = json.loads(daemon_cfg_path.read_text())
+            config["restart_every_hours"] = dm_cfg.get("restart_every_hours", 4)
+            config["duration_hours"] = dm_cfg.get("duration_hours", 0)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 3. Convert TUI games to daemon format
+    output_dir = Path.home() / "projects" / "steamcast" / "output"
+    for gname, gdata in tui_games.items():
+        if not gdata.get("active", False):
+            continue
+
+        stream_key = gdata.get("rtmp_key", "")
+        if not stream_key:
+            continue
+
+        # Auto-detect video from output dir
+        video_path = output_dir / f"{gname}.mp4"
+        if not video_path.exists():
+            # Try alternate filenames
+            for ext in (".mp4", ".mkv", ".webm"):
+                candidate = output_dir / f"{gname}{ext}"
+                if candidate.exists():
+                    video_path = candidate
+                    break
+
+        if not video_path.exists():
+            logger.warning("No video found for '%s' in %s — skipping", gname, output_dir)
+            continue
+
+        config["games"].append({
+            "name": gname,
+            "bitrate": "5000k",
+            "video": str(video_path),
+            "stream_key": stream_key,
+        })
+
+    return config
 
 
 if __name__ == "__main__":
