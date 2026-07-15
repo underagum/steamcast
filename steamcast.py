@@ -2489,6 +2489,9 @@ def show_main_menu():
         else:
             choice = input("Select option: ").strip().lower()
 
+        if not choice:
+            continue
+
         if choice == "1":
             show_prep_phase()
         elif choice == "2":
@@ -2608,6 +2611,9 @@ def show_daemon_menu():
             choice = Prompt.ask("[cyan]Select option[/]", default="b").strip().lower()
         else:
             choice = input("Select option: ").strip().lower()
+
+        if not choice:
+            continue
 
         if choice == "1":
             if running:
