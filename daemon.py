@@ -1,5 +1,4 @@
-"""
-SteamCast Daemon — headless background stream manager for Linux.
+"""SteamCast Daemon — headless background stream manager for Linux.
 
 Usage:
     steamcast daemon start
@@ -29,9 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -64,7 +61,6 @@ def setup_logging():
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    # Also log to stderr (captured by systemd/journald if used)
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
     console.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
@@ -136,7 +132,6 @@ class DaemonManager:
         # ── First fork ──
         pid = os.fork()
         if pid > 0:
-            # Parent exits — child continues in new session
             sys.exit(0)
 
         os.setsid()
@@ -303,7 +298,6 @@ class DaemonManager:
                 logger.error("Video not found for '%s': %s", gname, video)
                 continue
 
-            # Build ffmpeg args directly (simpler than build_ffmpeg_args for headless)
             rtmp_url = f"rtmp://ingest-rtmp.broadcast.steamcontent.com/app/{game.get('stream_key', '')}"
             args = [
                 ffmpeg,
@@ -317,14 +311,13 @@ class DaemonManager:
                 str(rtmp_url),
             ]
 
-            log_file = LOG_DIR / f"{sanitize_filename(gname)}_daemon.log"
-            logger.info("Launching stream: %s (%s)", gname, bitrate)
-
             proc = subprocess.Popen(
                 args,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+
+            self._log(f"Streaming {gname} — {bitrate} (PID {proc.pid})")
 
             self._active_streams[gname] = {
                 "proc": proc,
@@ -335,7 +328,6 @@ class DaemonManager:
                 "status": "LIVE",
                 "start_args": args,
             }
-            self._log(f"Streaming {gname} — {bitrate} (PID {proc.pid})")
             time.sleep(2)
 
         self._log(f"All {len(self._active_streams)} streams launched.")
@@ -399,7 +391,7 @@ class DaemonManager:
             if proc and proc.poll() is None:
                 proc.kill()
                 logger.info("Killed stream: %s (PID %d)", gname, proc.pid)
-        self._log(f"♻ All streams killed — reconnect will pick them up.")
+        self._log("♻ All streams killed — reconnect will pick them up.")
         time.sleep(2)
 
     def _stop_all_streams(self, reason: str):
@@ -418,12 +410,6 @@ class DaemonManager:
         self._active_streams.clear()
         self._write_state()
         self._running = False
-
-    def _find_video_for_game(self, gname: str, games: list[dict]) -> Optional[str]:
-        for g in games:
-            if g.get("name") == gname:
-                return g.get("video")
-        return None
 
     def _log(self, msg: str):
         """Add a line to the in-memory log buffer."""
@@ -463,6 +449,7 @@ class DaemonManager:
 
 # ── HTTP Status Server ──
 
+
 class SteamCastDaemonServer:
     """Lightweight HTTP server exposing daemon status via JSON API.
 
@@ -480,8 +467,22 @@ class SteamCastDaemonServer:
             daemon_ref = daemon
 
             def do_GET(self):
-                if self.path == "/status" or self.path == "/":
-                    self._send_json(self._get_status())
+                if self.path in ("/status", "/"):
+                    self._send_json({
+                        "running": True,
+                        "pid": os.getpid(),
+                        "uptime": daemon._uptime_str(),
+                        "streams": [
+                            {
+                                "name": gname,
+                                "status": s.get("status", "UNKNOWN"),
+                                "bitrate": s.get("bitrate", ""),
+                                "pid": proc.pid if (proc := s.get("proc")) and proc.poll() is None else None,
+                                "started_at": s.get("started_at", ""),
+                            }
+                            for gname, s in daemon._active_streams.items()
+                        ],
+                    })
                 elif self.path.startswith("/logs"):
                     n = 50
                     if "?n=" in self.path:
@@ -489,7 +490,7 @@ class SteamCastDaemonServer:
                             n = int(self.path.split("?n=")[1])
                         except (ValueError, IndexError):
                             pass
-                    self._send_json({"lines": self._get_logs(n)})
+                    self._send_json({"lines": daemon._log_buffer[-n:]})
                 else:
                     self.send_response(404)
                     self.end_headers()
@@ -500,7 +501,7 @@ class SteamCastDaemonServer:
                     self.send_response(200)
                     self.end_headers()
                     self.wfile.write(b'{"status": "shutting down"}')
-                    Thread(target=self._shutdown, daemon=True).start()
+                    Thread(target=lambda: (time.sleep(0.5), daemon._handle_signal(signal.SIGTERM, None)), daemon=True).start()
                 else:
                     self.send_response(404)
                     self.end_headers()
@@ -514,36 +515,9 @@ class SteamCastDaemonServer:
                 self.end_headers()
                 self.wfile.write(body)
 
-            def _get_status(self):
-                streams = []
-                for gname, s in daemon._active_streams.items():
-                    proc = s.get("proc")
-                    streams.append({
-                        "name": gname,
-                        "status": s.get("status", "UNKNOWN"),
-                        "bitrate": s.get("bitrate", ""),
-                        "pid": proc.pid if proc and proc.poll() is None else None,
-                        "started_at": s.get("started_at", ""),
-                    })
-                return {
-                    "running": True,
-                    "pid": os.getpid(),
-                    "uptime": daemon._uptime_str(),
-                    "streams": streams,
-                }
-
-            def _get_logs(self, n: int):
-                return daemon._log_buffer[-n:]
-
-            def _shutdown(self):
-                time.sleep(0.5)
-                daemon._handle_signal(signal.SIGTERM, None)
-
-            # Silence default request logging
             def log_message(self, format, *args):
                 pass
 
-            # CORS preflight
             def do_OPTIONS(self):
                 self.send_response(200)
                 self.send_header("Access-Control-Allow-Origin", "*")
@@ -558,6 +532,7 @@ class SteamCastDaemonServer:
 
 
 # ── CLI Entry Points ──
+
 
 def cmd_start(config: dict | None = None):
     """Start the daemon (called from steamcast.py)."""
@@ -600,7 +575,6 @@ def load_config() -> dict:
 
 
 if __name__ == "__main__":
-    # Direct invocation for testing
     if len(sys.argv) > 1:
         if sys.argv[1] == "start":
             cmd_start(load_config())

@@ -17,10 +17,9 @@ import shutil
 import sys
 import time
 import urllib.request
-from datetime import datetime
 
 
-ATTACH_POLL_INTERVAL = 3  # seconds
+ATTACH_POLL_INTERVAL = 3
 DAEMON_PORT = 6789
 DAEMON_STATUS_URL = f"http://127.0.0.1:{DAEMON_PORT}/status"
 DAEMON_LOGS_URL = f"http://127.0.0.1:{DAEMON_PORT}/logs?n=10"
@@ -37,14 +36,6 @@ def _fetch(url: str, timeout: int = 3) -> dict | None:
 def _clear():
     """Clear terminal."""
     print("\033[2J\033[H", end="", flush=True)
-
-
-def _format_time(seconds: int | None) -> str:
-    if seconds is None:
-        return "--:--:--"
-    h, r = divmod(seconds, 3600)
-    m, s = divmod(r, 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
 
 
 def attach():
