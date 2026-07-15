@@ -2620,12 +2620,14 @@ def show_daemon_menu():
                 try:
                     cfg = load_config()
                     cmd_start(cfg)
-                    # After fork, we're back immediately (parent exited)
-                    console.print("[green]Daemon started.[/]")
+                except SystemExit:
+                    pass  # Parent fork exited; daemon now running
                 except DaemonError as e:
                     console.print(f"[red]✗ {e}[/]")
                 except KeyboardInterrupt:
                     console.print("\n[yellow]Start cancelled.[/]")
+                else:
+                    console.print("[green]Daemon started.[/]")
 
         elif choice == "2" and running:
             console.print("\nStopping daemon...")
@@ -2642,9 +2644,12 @@ def show_daemon_menu():
                 time.sleep(1)
                 cfg = load_config()
                 cmd_start(cfg)
-                console.print("[green]✅ Daemon restarted.[/]")
+            except SystemExit:
+                pass
             except DaemonError as e:
                 console.print(f"[red]✗ {e}[/]")
+            else:
+                console.print("[green]✅ Daemon restarted.[/]")
 
         elif choice == "b":
             break
@@ -2677,7 +2682,7 @@ def main():
 
 def _cmd_daemon():
     """Handle 'steamcast daemon start|stop|status'."""
-    from daemon import cmd_start, cmd_stop, cmd_status, load_config, json, DaemonError
+    from daemon import cmd_start, cmd_stop, cmd_status, load_config, DaemonError
 
     sub = sys.argv[2].lower() if len(sys.argv) > 2 else "status"
 

@@ -31,6 +31,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -49,6 +50,23 @@ DEFAULT_PORT = 6789
 
 def _ensure_dir():
     STEAMCAST_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _parse_bitrate_kbps(bitrate: str) -> int:
+    """Extract numeric kbps from bitrate string (e.g. '5000k', '5M', '5000').
+
+    Returns 5000 (kbps) as default on parse failure.
+    """
+    import re
+    raw = bitrate.strip().lower()
+    m = re.match(r'^([\d.]+)\s*(k|kb|kbps|m|mb|mbps)?$', raw)
+    if not m:
+        return 5000  # sensible default
+    val = float(m.group(1))
+    unit = m.group(2) or 'k'
+    if unit in ('m', 'mb', 'mbps'):
+        return int(val * 1000)
+    return int(val)
 
 
 # ── Logging ──
@@ -112,6 +130,7 @@ class DaemonManager:
         self.config = config or {}
         self._running = False
         self._active_streams: dict = {}
+        self._streams_lock = threading.Lock()
         self._log_buffer: list[str] = []
         self._max_log_lines = 500
         self._start_time: float | None = None
@@ -131,6 +150,8 @@ class DaemonManager:
 
         # ── First fork ──
         pid = os.fork()
+        if pid < 0:
+            raise DaemonError("Failed to fork (resource exhaustion?)")
         if pid > 0:
             sys.exit(0)
 
@@ -138,6 +159,8 @@ class DaemonManager:
 
         # ── Second fork ──
         pid = os.fork()
+        if pid < 0:
+            raise DaemonError("Failed to fork (resource exhaustion?)")
         if pid > 0:
             sys.exit(0)
 
@@ -176,7 +199,12 @@ class DaemonManager:
             logger.warning("No games configured — daemon starting idle. Add games to ~/.steamcast/config.json")
 
         # ── Start the HTTP server in a thread ──
-        server = SteamCastDaemonServer(("127.0.0.1", DEFAULT_PORT), self)
+        try:
+            server = SteamCastDaemonServer(("127.0.0.1", DEFAULT_PORT), self)
+        except OSError as e:
+            logger.error("Cannot bind port %d: %s. Is another daemon running?", DEFAULT_PORT, e)
+            remove_pid()
+            raise DaemonError(f"Port {DEFAULT_PORT} already in use. Stop existing daemon first.") from e
         server_thread = Thread(target=server.serve_forever, daemon=True)
         server_thread.start()
         logger.info("HTTP status server listening on 127.0.0.1:%d", DEFAULT_PORT)
@@ -251,12 +279,12 @@ class DaemonManager:
     def _handle_signal(self, signum, frame):
         logger.info("Received signal %d, shutting down...", signum)
         self._running = False
-        # Kill all stream processes
-        for gname, stream in list(self._active_streams.items()):
-            proc = stream.get("proc")
-            if proc and proc.poll() is None:
-                logger.info("Killing stream: %s", gname)
-                proc.kill()
+        with self._streams_lock:
+            for gname, stream in list(self._active_streams.items()):
+                proc = stream.get("proc")
+                if proc and proc.poll() is None:
+                    logger.info("Killing stream: %s", gname)
+                    proc.kill()
         remove_pid()
         logger.info("Daemon stopped.")
         sys.exit(0)
@@ -307,7 +335,7 @@ class DaemonManager:
                 "-f", "flv",
                 "-b:v", bitrate,
                 "-maxrate", bitrate,
-                "-bufsize", f"{int(bitrate.replace('k','')) * 2}k",
+                "-bufsize", f"{_parse_bitrate_kbps(bitrate) * 2}k",
                 str(rtmp_url),
             ]
 
@@ -319,15 +347,16 @@ class DaemonManager:
 
             self._log(f"Streaming {gname} — {bitrate} (PID {proc.pid})")
 
-            self._active_streams[gname] = {
-                "proc": proc,
-                "bitrate": bitrate,
-                "video": str(video),
-                "stream_key": game.get("stream_key", ""),
-                "started_at": datetime.now().isoformat(),
-                "status": "LIVE",
-                "start_args": args,
-            }
+            with self._streams_lock:
+                self._active_streams[gname] = {
+                    "proc": proc,
+                    "bitrate": bitrate,
+                    "video": str(video),
+                    "stream_key": game.get("stream_key", ""),
+                    "started_at": datetime.now().isoformat(),
+                    "status": "LIVE",
+                    "start_args": args,
+                }
             time.sleep(2)
 
         self._log(f"All {len(self._active_streams)} streams launched.")
@@ -352,32 +381,32 @@ class DaemonManager:
                 self._log(f"♻ Next auto-restart at {next_restart_at.strftime('%H:%M:%S')}")
 
             # Check each stream's health
-            for gname, stream in list(self._active_streams.items()):
-                proc = stream.get("proc")
-                if proc and proc.poll() is not None:
-                    exit_code = proc.returncode
-                    logger.warning("Stream %s died (exit %d). Reconnecting...", gname, exit_code)
-                    self._log(f"✗ {gname} died (exit {exit_code}). Reconnecting...")
+            with self._streams_lock:
+                for gname, stream in list(self._active_streams.items()):
+                    proc = stream.get("proc")
+                    if proc and proc.poll() is not None:
+                        exit_code = proc.returncode
+                        logger.warning("Stream %s died (exit %d). Reconnecting...", gname, exit_code)
+                        self._log(f"✗ {gname} died (exit {exit_code}). Reconnecting...")
 
-                    # Restart stream using stored args
-                    args = stream.get("start_args", [])
-                    if args:
-                        new_proc = subprocess.Popen(
-                            args,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        stream["proc"] = new_proc
+                        # Restart stream using stored args
+                        args = stream.get("start_args", [])
+                        if args:
+                            new_proc = subprocess.Popen(
+                                args,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+                            stream["proc"] = new_proc
+                            stream["status"] = "LIVE"
+                            stream["started_at"] = datetime.now().isoformat()
+                            self._log(f"↻ {gname} reconnected (PID {new_proc.pid})")
+                        else:
+                            stream["status"] = "DEAD"
+                            self._log(f"✗ {gname} — start args missing, cannot reconnect")
+
+                    if proc and proc.poll() is None:
                         stream["status"] = "LIVE"
-                        stream["started_at"] = datetime.now().isoformat()
-                        self._log(f"↻ {gname} reconnected (PID {new_proc.pid})")
-                    else:
-                        stream["status"] = "DEAD"
-                        self._log(f"✗ {gname} — start args missing, cannot reconnect")
-
-                # Mark alive
-                if proc and proc.poll() is None:
-                    stream["status"] = "LIVE"
 
             self._write_state()
             time.sleep(5)
@@ -386,28 +415,30 @@ class DaemonManager:
 
     def _kill_all_streams(self):
         """Kill all ffmpeg processes. Existing reconnect logic will respawn them."""
-        for gname, stream in list(self._active_streams.items()):
-            proc = stream.get("proc")
-            if proc and proc.poll() is None:
-                proc.kill()
-                logger.info("Killed stream: %s (PID %d)", gname, proc.pid)
+        with self._streams_lock:
+            for gname, stream in list(self._active_streams.items()):
+                proc = stream.get("proc")
+                if proc and proc.poll() is None:
+                    proc.kill()
+                    logger.info("Killed stream: %s (PID %d)", gname, proc.pid)
         self._log("♻ All streams killed — reconnect will pick them up.")
         time.sleep(2)
 
     def _stop_all_streams(self, reason: str):
         """Terminate all streams permanently."""
         logger.info("Stopping all streams (reason: %s)", reason)
-        for gname, stream in list(self._active_streams.items()):
-            proc = stream.get("proc")
-            if proc and proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-            stream["status"] = "STOPPED"
-        self._active_streams.clear()
+        with self._streams_lock:
+            for gname, stream in list(self._active_streams.items()):
+                proc = stream.get("proc")
+                if proc and proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+                stream["status"] = "STOPPED"
+            self._active_streams.clear()
         self._write_state()
         self._running = False
 
@@ -428,19 +459,20 @@ class DaemonManager:
 
     def _write_state(self):
         """Write current state to JSON file for external tools."""
-        state = {
-            "pid": os.getpid(),
-            "uptime_seconds": int(time.time() - self._start_time) if self._start_time else 0,
-            "streams": {
-                gname: {
-                    "status": s.get("status", "UNKNOWN"),
-                    "bitrate": s.get("bitrate", "?"),
-                    "started_at": s.get("started_at", ""),
-                    "pid": s.get("proc", None) and (s["proc"].pid or None),
-                }
-                for gname, s in self._active_streams.items()
-            },
-        }
+        with self._streams_lock:
+            state = {
+                "pid": os.getpid(),
+                "uptime_seconds": int(time.time() - self._start_time) if self._start_time else 0,
+                "streams": {
+                    gname: {
+                        "status": s.get("status", "UNKNOWN"),
+                        "bitrate": s.get("bitrate", "?"),
+                        "started_at": s.get("started_at", ""),
+                        "pid": s.get("proc", None) and (s["proc"].pid or None),
+                    }
+                    for gname, s in self._active_streams.items()
+                },
+            }
         try:
             STATE_FILE.write_text(json.dumps(state, indent=2))
         except OSError:
@@ -464,25 +496,25 @@ class SteamCastDaemonServer:
         self._daemon = daemon
 
         class _Handler(BaseHTTPRequestHandler):
-            daemon_ref = daemon
 
             def do_GET(self):
                 if self.path in ("/status", "/"):
-                    self._send_json({
-                        "running": True,
-                        "pid": os.getpid(),
-                        "uptime": daemon._uptime_str(),
-                        "streams": [
-                            {
-                                "name": gname,
-                                "status": s.get("status", "UNKNOWN"),
-                                "bitrate": s.get("bitrate", ""),
-                                "pid": proc.pid if (proc := s.get("proc")) and proc.poll() is None else None,
-                                "started_at": s.get("started_at", ""),
-                            }
-                            for gname, s in daemon._active_streams.items()
-                        ],
-                    })
+                    with daemon._streams_lock:
+                        self._send_json({
+                            "running": True,
+                            "pid": os.getpid(),
+                            "uptime": daemon._uptime_str(),
+                            "streams": [
+                                {
+                                    "name": gname,
+                                    "status": s.get("status", "UNKNOWN"),
+                                    "bitrate": s.get("bitrate", ""),
+                                    "pid": proc.pid if (proc := s.get("proc")) and proc.poll() is None else None,
+                                    "started_at": s.get("started_at", ""),
+                                }
+                                for gname, s in daemon._active_streams.items()
+                            ],
+                        })
                 elif self.path.startswith("/logs"):
                     n = 50
                     if "?n=" in self.path:
