@@ -613,7 +613,7 @@ def run_ffmpeg(
 ) -> tuple[bool, str]:
     """Run ffmpeg, capture output, optionally write to log. Returns (success, output).
 
-    If ``on_progress`` is provided, it is called with the condensed status string
+    If ``on_progress`` is provided, it is called with the raw ffmpeg progress line
     (e.g. ``"frame 180/??  fps 30  7.0M  speed 1.0x"``) each time ffmpeg emits
     a ``frame=`` or ``progress=`` line. The caller is responsible for display
     (typically ``print(..., end='\\r')`` or a Rich status line)."""
@@ -639,7 +639,7 @@ def run_ffmpeg(
             if "frame=" in stripped or "progress=" in stripped:
                 last_progress = stripped
                 if on_progress:
-                    on_progress(_condense_progress(stripped))
+                    on_progress(stripped)
         proc.wait()
     except BaseException:
         # Ctrl+C or unexpected failure — kill ffmpeg, don't leave orphans
@@ -685,32 +685,6 @@ def run_ffmpeg(
             pass
 
     return success, output
-
-
-def _condense_progress(line: str) -> str:
-    """Extract key fields from an ffmpeg status line into a compact display string.
-
-    Input:  ``frame=  180 fps=30 q=-1.0 size=   15360kB time=00:00:06.00 bitrate=20971.5kbits/s speed=1.0x``
-    Output: ``"frame 180  fps 30  7.0M  speed 1.0x"``
-    """
-    parts = []
-    m = re.search(r"frame=\s*(\d+)", line)
-    if m:
-        parts.append(f"frame {m.group(1)}")
-    m = re.search(r"fps=\s*([\d.]+)", line)
-    if m:
-        parts.append(f"fps {m.group(1)}")
-    m = re.search(r"bitrate=\s*([\d.]+)kbits/s", line)
-    if m:
-        kbps = float(m.group(1))
-        if kbps >= 1000:
-            parts.append(f"{kbps / 1000:.1f}M")
-        else:
-            parts.append(f"{kbps:.0f}K")
-    m = re.search(r"speed=\s*([\d.]+)x", line)
-    if m:
-        parts.append(f"speed {m.group(1)}x")
-    return "  ".join(parts) if parts else line
 
 
 def convert_video(
@@ -1162,13 +1136,95 @@ def show_prep_phase():
     fail_count = 0
 
     # ── Progress display helper ──
-    def _show_progress(status: str) -> None:
-        """Display a live-updating ffmpeg progress line with carriage return."""
-        # Truncate to terminal width (assume 100 cols if unavailable)
+    total_dur_str: str = ""
+    _last_fps: float = 30.0
+    _total_sec: float = 0.0
+
+    def _parse_int(text: str, pattern: str) -> int | None:
+        m = re.search(pattern, text)
+        return int(m.group(1)) if m else None
+
+    def _parse_float(text: str, pattern: str) -> float | None:
+        m = re.search(pattern, text)
+        return float(m.group(1)) if m else None
+
+    def _parse_dur_sec(dur: str) -> float:
+        """Convert 'H:MM:SS' or 'M:SS' to total seconds."""
+        parts = dur.split(":")
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        elif len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+        return 0.0
+
+    def _show_progress(raw: str) -> None:
+        """Display live-updating ffmpeg progress as 'Frame N/T | fps N | Bitrate N | Speed Nx | ETA N'."""
+        nonlocal _last_fps, _total_sec
         cols = shutil.get_terminal_size().columns or 100
-        # Clean line (overwrite previous) + new status
-        line = f"\r\033[K  [dim]{status}[/]" if RICH else f"\r\033[K  {status}"
-        # Strip Rich markup for the display below
+
+        # Parse raw ffmpeg line
+        frame = _parse_int(raw, r"frame=\s*(\d+)")
+        fps = _parse_float(raw, r"fps=\s*([\d.]+)")
+        bitrate_k = _parse_float(raw, r"bitrate=\s*([\d.]+)kbits/s")
+        speed = _parse_float(raw, r"speed=\s*([\d.]+)x")
+
+        if fps:
+            _last_fps = fps
+
+        # Build pipe-separated display
+        parts = []
+
+        # Frame current/total
+        if frame is not None:
+            frame_str = f"Frame {frame}"
+            if _total_sec > 0 and _last_fps > 0:
+                total_frames = int(_total_sec * _last_fps)
+                if frame <= total_frames:
+                    frame_str += f"/{total_frames}"
+                else:
+                    frame_str += f"/~{max(total_frames, 1)}"
+            parts.append(frame_str)
+
+        # FPS
+        if fps is not None:
+            parts.append(f"fps {fps:.0f}")
+
+        # Bitrate
+        if bitrate_k is not None:
+            if bitrate_k >= 1000:
+                parts.append(f"Bitrate {bitrate_k / 1000:.1f}M")
+            else:
+                parts.append(f"Bitrate {bitrate_k:.0f}K")
+
+        # Speed
+        if speed is not None:
+            parts.append(f"Speed {speed:.1f}x")
+        else:
+            parts.append("Speed --")
+
+        # ETA
+        eta_str = ""
+        frame_now = frame or 0
+        fps_now = _last_fps
+        if total_dur_str and _total_sec > 0:
+            # Current time from frame/fps ratio
+            time_sec = frame_now / fps_now if fps_now > 0 else 0
+            if 0 < time_sec < _total_sec:
+                remaining = _total_sec - time_sec
+                spd = speed or 1.0
+                eta_sec = remaining / max(spd, 0.01)
+                em, es = divmod(int(eta_sec), 60)
+                eh, em = divmod(em, 60)
+                if eh > 0:
+                    eta_str = f"ETA {eh}:{em:02d}:{es:02d}"
+                else:
+                    eta_str = f"ETA {em}:{es:02d}"
+
+        display = " | ".join(parts)
+        if eta_str:
+            display += f" | {eta_str}"
+
+        line = f"\r\033[K  [dim]{display}[/]" if RICH else f"\r\033[K  {display}"
         clean = re.sub(r"\[/?[^\]]+\]", "", line) if RICH else line
         clean = clean[:cols]
         print(clean, end="", flush=True)
@@ -1195,7 +1251,10 @@ def show_prep_phase():
             # Single file — just convert
             prep_log = LOG_DIR / f"{safe_name}_prep.log"
             has_audio = has_audio_stream(files[0])
-            console.print(f"\n[dim]Converting {rich_escape(gname)}...[/]")
+            total_dur_str = get_video_duration(files[0])
+            _total_sec = _parse_dur_sec(total_dur_str)
+            _last_fps = 30.0
+            console.print(f"\n[dim]Converting {rich_escape(gname)} ({total_dur_str})...[/]")
             try:
                 ok = convert_video(files[0], out_path, enc, log_file=prep_log, on_progress=_show_progress, has_audio=has_audio)
             except KeyboardInterrupt:
@@ -1266,7 +1325,22 @@ def show_prep_phase():
                 # Concat
                 concat_log = LOG_DIR / f"{safe_name}_concat.log"
                 has_audio = has_audio_stream(files[0])
-                console.print(f"\n[dim]Concatenating {len(converted)} files for {rich_escape(gname)}...[/]")
+                # Compute total duration for multi-part videos
+                total_dur_str = ""
+                total_sec = 0
+                for pf in converted:
+                    pd = get_video_duration(pf)
+                    if pd != "??:??:??":
+                        pp = pd.split(":")
+                        if len(pp) == 3:
+                            total_sec += int(pp[0]) * 3600 + int(pp[1]) * 60 + int(pp[2])
+                if total_sec > 0:
+                    h, r = divmod(total_sec, 3600)
+                    m, s = divmod(r, 60)
+                    total_dur_str = f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m}:{s:02d}"
+                    _total_sec = total_sec
+                    _last_fps = 30.0
+                console.print(f"\n[dim]Concatenating {len(converted)} files for {rich_escape(gname)} ({total_dur_str})...[/]")
                 try:
                     ok = concat_videos(playlist_path, out_path, enc, log_file=concat_log, on_progress=_show_progress, has_audio=has_audio)
                 except KeyboardInterrupt:
