@@ -130,6 +130,46 @@ If something breaks, SteamCast tells you. Otherwise, none of this is visible.
 
 ---
 
+## Daemon Mode (Linux, v1.5.0+)
+
+For 24/7 broadcasts without a terminal. The daemon runs headless in the background, auto-restarts streams every 4 hours, and auto-recovers dead streams.
+
+```bash
+# Start the daemon (double-forks, lives independent of your session)
+steamcast daemon start
+
+# One-shot status check
+steamcast daemon status
+# 🔵 Daemon is running (PID 3124, uptime 2:14:33)
+#   dreadout  🟢 LIVE  5000k
+
+# Live read-only dashboard — Ctrl+C to detach, daemon keeps running
+steamcast attach
+
+# Graceful stop
+steamcast daemon stop
+```
+
+**How it works:**
+- Reads the same `config.json` your TUI uses — toggle games active in SETUP, the daemon picks them up
+- Auto-discovers prep'd videos from `output/` by game name
+- HTTP API on `127.0.0.1:6789` for status, logs, and control
+- Auto-restart at configurable intervals (default: 4 hours)
+- Optional duration limit — stops all streams after N hours
+- Zero zombie process leaks (proper `waitpid` double-fork)
+
+**Config** (`~/.steamcast/config.json` — optional overrides):
+```json
+{
+  "restart_every_hours": 4,
+  "duration_hours": 0
+}
+```
+
+> 💡 **Tip:** Run `steamcast daemon start` inside `tmux` on your server. Then from any SSH session (even mobile), `steamcast attach` shows the live dashboard. `steamcast daemon stop` stops everything cleanly.
+
+---
+
 ## Steam Broadcast Spec Reference
 
 | Parameter | Steam wants | SteamCast delivers |
@@ -219,6 +259,16 @@ At startup it pings GitHub. If there's a newer version, you'll see a notificatio
 - RTMP keys live in `config.json` and never leave your machine
 - Keys are redacted from stream logs
 - The only network activity is the FFmpeg download (one-time), the version check (optional, silent), and the RTMP streams you explicitly start
+
+---
+
+## Support Me!
+
+If SteamCast helps your studio, support us by:
+
+- 🛒 **[Buy our games on Steam](https://store.steampowered.com/developer/DH/)**
+- ❤️ **[Wishlist Broomstick Exorcist](https://store.steampowered.com/app/3411060/Broomstick_Exorcist/)**
+- 👁️ **[Wishlist DreadOut 3](https://store.steampowered.com/app/3500810/DreadOut_3/)**
 
 ---
 
