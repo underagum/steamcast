@@ -21,6 +21,16 @@ Two simple phases:
 
 ### 1. Get the tool
 
+**Linux / macOS — one command:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/underagum/steamcast/main/install.sh | bash
+```
+
+Relaunch your terminal, then just type `steamcast`.
+
+**Windows:**
+
 **[Download steamcast.exe](https://github.com/underagum/steamcast/releases/latest)** from Releases. Put it in its own folder. Double-click.
 
 No Python. No pip. No setup. First launch auto-downloads FFmpeg (~55 MB, one-time).
