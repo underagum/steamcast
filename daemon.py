@@ -153,8 +153,11 @@ class DaemonManager:
         if pid < 0:
             raise DaemonError("Failed to fork (resource exhaustion?)")
         if pid > 0:
-            sys.exit(0)
+            # Parent: wait for intermediate child to complete its double-fork
+            os.waitpid(pid, 0)
+            return  # Caller continues (TUI stays, CLI returns to shell)
 
+        # ── Intermediate child ──
         os.setsid()
 
         # ── Second fork ──
@@ -162,7 +165,7 @@ class DaemonManager:
         if pid < 0:
             raise DaemonError("Failed to fork (resource exhaustion?)")
         if pid > 0:
-            sys.exit(0)
+            os._exit(0)  # Intermediate child exits (no zombie — parent will wait)
 
         # ── Daemon process ──
         write_pid(os.getpid())

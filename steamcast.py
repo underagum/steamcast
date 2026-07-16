@@ -2636,8 +2636,6 @@ def show_daemon_menu():
                 try:
                     cfg = load_config()
                     cmd_start(cfg)
-                except SystemExit:
-                    pass  # Parent fork exited; daemon now running
                 except DaemonError as e:
                     console.print(f"[red]✗ {e}[/]")
                 except KeyboardInterrupt:
@@ -2660,8 +2658,6 @@ def show_daemon_menu():
                 time.sleep(1)
                 cfg = load_config()
                 cmd_start(cfg)
-            except SystemExit:
-                pass
             except DaemonError as e:
                 console.print(f"[red]✗ {e}[/]")
             else:
