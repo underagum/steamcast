@@ -1,5 +1,45 @@
 # Changelog
 
+## v1.5.1 — 2026-07-16
+
+### Fixed
+
+- **`steamcast update` compatibility on modern Linux.** Passes `--break-system-packages` to `pip3` for PEP 668 compliance (Ubuntu 24.04+, Debian 12+).
+- **CLI consistency.** `steamcast daemon attach` replaces `steamcast attach` — all daemon commands now share the `daemon` prefix. Old `steamcast attach` kept as backward-compat alias.
+- **Resolved UI flash on keypress.** Empty `Prompt.ask()` submissions are now silently skipped in both main and daemon menus.
+- **Daemon status no longer freezes the TUI.** HTTP timeout reduced to 1 second, status is cached for 3 seconds in main menu loop.
+- **Zombie processes eliminated.** Daemon double-fork now properly reaps intermediate child processes (`os.waitpid`). Zero zombies per start/stop cycle.
+- **Thread safety.** Added `threading.Lock` around all `_active_streams` dict access for HTTP handler and monitor loop.
+
+### Changed
+
+- **No more venv.** Install script and launcher use system Python directly. `pip3` installs deps globally.
+- **Attach no longer crashes the TUI.** `sys.exit(1)` replaced with controlled `return` — failed attach returns to daemon menu instead of killing the session.
+- **Bitrate parsing robust.** Now handles `5000K`, `5M`, `7.5M`, and bare `5000` formats.
+- **Menu navigation consistency.** Daemon Manager uses `[Q]` to go back (matches all other menus).
+
+## v1.5.0 — 2026-07-16
+
+### Added
+
+- **Daemon Mode (Linux).** Headless background streaming daemon for 24/7 broadcasts.
+  - `steamcast daemon start|stop|status|attach` commands
+  - HTTP API on `127.0.0.1:6789` — `/status`, `/logs`, `/shutdown`
+  - Auto-restart at configurable intervals (default: 4 hours)
+  - Optional duration limit — stops all streams after N hours
+  - Auto-detects games from TUI config & videos from `output/`
+  - Graceful signal handling (SIGTERM/SIGINT) with stream cleanup
+- **TUI Integration.** Daemon status banner on main menu (live, cached 3s). `[4] Daemon Manager` submenu with start/stop/restart/attach.
+- **One-line installer.** `curl -fsSL https://raw.githubusercontent.com/underagum/steamcast/main/install.sh | bash`
+- **`steamcast update` command.** `git pull` + `pip3 install -r requirements.txt`
+- **`requirements.txt`.** Single source for Python dependencies (`rich>=13.0`, `psutil>=5.9`)
+- **`steamcast attach`.** Read-only live TUI dashboard polling the daemon's HTTP API.
+- **`Support Me!` section** in README with Digital Happiness game links.
+
+### Changed
+
+- CLI shortcuts table updated in README with daemon commands
+
 ## v1.4.0 — 2026-07-05
 
 ### Added
