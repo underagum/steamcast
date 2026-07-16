@@ -2614,15 +2614,25 @@ def show_daemon_menu():
             console.print("  [white][1][/] Start daemon")
             console.print("       [dim]Headless background stream manager[/]")
 
-        console.print("  [white][B][/] ack to main menu")
+        console.print("  [red][Q][/] Back to main menu")
         console.print()
 
         if RICH:
-            choice = Prompt.ask("[cyan]Select option[/]", default="b").strip().lower()
+            choice = Prompt.ask("[cyan]Select option[/]", default="q").strip().lower()
         else:
             choice = input("Select option: ").strip().lower()
 
         if not choice:
+            continue
+
+        if running:
+            valid = {"1", "2", "3", "q"}
+        else:
+            valid = {"1", "q"}
+        if choice not in valid:
+            if not choice:
+                continue
+            console.print("[yellow]Invalid option.[/]")
             continue
 
         if choice == "1":
@@ -2663,11 +2673,8 @@ def show_daemon_menu():
             else:
                 console.print("[green]✅ Daemon restarted.[/]")
 
-        elif choice == "b":
+        elif choice == "q":
             break
-        else:
-            console.print("[yellow]Invalid option.[/]")
-            time.sleep(0.5)
 
 
 def main():
