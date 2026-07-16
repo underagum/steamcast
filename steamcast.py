@@ -2757,7 +2757,10 @@ def _cmd_update():
     subprocess.run(["git", "-C", str(project_dir), "pull", "origin", "main"], check=True)
 
     print("📦 Installing dependencies...")
-    subprocess.run(["pip3", "install", "-r", str(project_dir / "requirements.txt")], check=True)
+    subprocess.run(
+        ["pip3", "install", "--break-system-packages", "-q", "-r", str(project_dir / "requirements.txt")],
+        check=True,
+    )
 
     print("✅ SteamCast updated!")
     from steamcast import VERSION
