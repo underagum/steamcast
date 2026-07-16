@@ -2753,16 +2753,11 @@ def _cmd_update():
 
     project_dir = Path(__file__).resolve().parent
 
-    # Determine pip binary (use venv pip if available, else system)
-    pip = str(project_dir / "venv" / "bin" / "pip")
-    if not Path(pip).exists():
-        pip = "pip3"
-
     print("🔄 Pulling latest SteamCast...")
     subprocess.run(["git", "-C", str(project_dir), "pull", "origin", "main"], check=True)
 
     print("📦 Installing dependencies...")
-    subprocess.run([pip, "install", "-r", str(project_dir / "requirements.txt")], check=True)
+    subprocess.run(["pip3", "install", "-r", str(project_dir / "requirements.txt")], check=True)
 
     print("✅ SteamCast updated!")
     from steamcast import VERSION
