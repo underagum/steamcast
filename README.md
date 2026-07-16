@@ -33,8 +33,6 @@ Relaunch your terminal, then just type `steamcast`.
 
 **[Download steamcast.exe](https://github.com/underagum/steamcast/releases/latest)** from Releases. Put it in its own folder. Double-click.
 
-No Python. No pip. No setup. First launch auto-downloads FFmpeg (~55 MB, one-time).
-
 ### 2. Drop in your videos
 
 Copy files into the `input/` folder. Name them by game:
