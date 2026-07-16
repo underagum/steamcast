@@ -173,7 +173,7 @@ steamcast daemon stop
 }
 ```
 
-> 💡 **Tip:** Run `steamcast daemon start` inside `tmux` on your server. Then from any SSH session (even mobile), `steamcast daemon attach` shows the live dashboard. `steamcast daemon stop` stops everything cleanly.
+> 💡 **Tip:** The daemon detaches completely from your terminal. Start it from any SSH session — it keeps running after you disconnect. Run `steamcast daemon attach` to check in anytime.
 
 ---
 
