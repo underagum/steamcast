@@ -28,11 +28,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -57,7 +59,6 @@ def _parse_bitrate_kbps(bitrate: str) -> int:
 
     Returns 5000 (kbps) as default on parse failure.
     """
-    import re
     raw = bitrate.strip().lower()
     m = re.match(r'^([\d.]+)\s*(k|kb|kbps|m|mb|mbps)?$', raw)
     if not m:
@@ -199,7 +200,7 @@ class DaemonManager:
         duration = self.config.get("duration_hours", 0)
 
         if not games:
-            logger.warning("No games configured — daemon starting idle. Add games to ~/.steamcast/config.json")
+            logger.warning("No games configured — daemon starting idle. Add games to SteamCast TUI Setup (option 3).")
 
         # ── Start the HTTP server in a thread ──
         try:
@@ -262,7 +263,6 @@ class DaemonManager:
 
         # Try to get detailed status from the HTTP API
         try:
-            import urllib.request
             resp = urllib.request.urlopen(f"http://127.0.0.1:{DEFAULT_PORT}/status", timeout=1)
             return json.loads(resp.read().decode())
         except Exception:
@@ -304,7 +304,7 @@ class DaemonManager:
 
         # ── Import steamcast internals ──
         sys.path.insert(0, str(Path(__file__).parent))
-        from steamcast import find_ffmpeg, sanitize_filename, LOG_DIR
+        from steamcast import find_ffmpeg
 
         ffmpeg = find_ffmpeg()
         if not ffmpeg:
@@ -401,6 +401,7 @@ class DaemonManager:
                                 stderr=subprocess.DEVNULL,
                             )
                             stream["proc"] = new_proc
+                            proc = new_proc  # update local ref for status check below
                             stream["status"] = "LIVE"
                             stream["started_at"] = datetime.now().isoformat()
                             self._log(f"↻ {gname} reconnected (PID {new_proc.pid})")

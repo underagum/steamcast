@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import sys
 import time
 import urllib.request
 
@@ -58,7 +57,7 @@ def attach():
     else:
         print("❌ Could not reach SteamCast daemon.")
         print("   Is it running? Try: steamcast daemon start")
-        sys.exit(1)
+        return  # controlled return to caller (TUI stays alive)
 
     try:
         while True:
@@ -105,7 +104,7 @@ def attach():
                     print(f"  {name:<25} {st_display:<10} {bitrate:<10} {pid_str:<8} {started:<10}")
             else:
                 print("  \033[33mNo active streams.\033[0m")
-                print("  Add games to ~/.steamcast/config.json or restart the daemon.")
+                print("  Use the TUI Setup menu to add and activate games.")
 
             print()
 
