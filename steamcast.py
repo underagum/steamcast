@@ -2689,6 +2689,8 @@ def main():
             _cmd_daemon()
         elif cmd == "attach":
             _cmd_attach()
+        elif cmd == "update":
+            _cmd_update()
         elif cmd == "setup":
             show_cast_setup()
         elif cmd == "cast":
@@ -2742,6 +2744,29 @@ def _cmd_attach():
     """Handle 'steamcast attach'."""
     from attach import attach as _attach
     _attach()
+
+
+def _cmd_update():
+    """Handle 'steamcast update' — git pull + pip install deps."""
+    import subprocess
+    from pathlib import Path
+
+    project_dir = Path(__file__).resolve().parent
+
+    # Determine pip binary (use venv pip if available, else system)
+    pip = str(project_dir / "venv" / "bin" / "pip")
+    if not Path(pip).exists():
+        pip = "pip3"
+
+    print("🔄 Pulling latest SteamCast...")
+    subprocess.run(["git", "-C", str(project_dir), "pull", "origin", "main"], check=True)
+
+    print("📦 Installing dependencies...")
+    subprocess.run([pip, "install", "-r", str(project_dir / "requirements.txt")], check=True)
+
+    print("✅ SteamCast updated!")
+    from steamcast import VERSION
+    print(f"   Version: {VERSION}")
 
 
 if __name__ == "__main__":

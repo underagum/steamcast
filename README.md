@@ -35,8 +35,6 @@ Relaunch your terminal, then just type `steamcast`.
 
 No Python. No pip. No setup. First launch auto-downloads FFmpeg (~55 MB, one-time).
 
-*Prefer running from source?* `git clone`, `pip install rich psutil`, `python steamcast.py`.
-
 ### 2. Drop in your videos
 
 Copy files into the `input/` folder. Name them by game:
@@ -137,6 +135,7 @@ If something breaks, SteamCast tells you. Otherwise, none of this is visible.
 | Jump to PREP | `steamcast.exe prep` | `python steamcast.py prep` |
 | Jump to SETUP | `steamcast.exe setup` | `python steamcast.py setup` |
 | Jump to CAST | `steamcast.exe cast` | `python steamcast.py cast` |
+| Update | — | `steamcast update` |
 
 ---
 

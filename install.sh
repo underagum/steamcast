@@ -50,7 +50,7 @@ if [ ! -d "venv" ]; then
 fi
 
 echo -e "  Installing dependencies..."
-./venv/bin/pip install -q rich psutil 2>&1 | tail -1
+./venv/bin/pip install -q -r requirements.txt 2>&1 | tail -1
 
 # ── Create launcher ──
 mkdir -p "$BIN_DIR"
