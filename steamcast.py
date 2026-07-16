@@ -2688,7 +2688,7 @@ def main():
         elif cmd == "daemon":
             _cmd_daemon()
         elif cmd == "attach":
-            _cmd_attach()
+            _cmd_attach()  # backward-compat alias for 'steamcast daemon attach'
         elif cmd == "update":
             _cmd_update()
         elif cmd == "setup":
@@ -2702,7 +2702,7 @@ def main():
 
 
 def _cmd_daemon():
-    """Handle 'steamcast daemon start|stop|status'."""
+    """Handle 'steamcast daemon start|stop|status|attach'."""
     from daemon import cmd_start, cmd_stop, cmd_status, load_config, DaemonError
 
     sub = sys.argv[2].lower() if len(sys.argv) > 2 else "status"
@@ -2735,9 +2735,11 @@ def _cmd_daemon():
         else:
             print("⚪ Daemon is not running.")
             print("   Use: steamcast daemon start")
+    elif sub == "attach":
+        _cmd_attach()
     else:
         print(f"Unknown daemon subcommand: {sub}")
-        print("Usage: steamcast daemon {start|stop|status}")
+        print("Usage: steamcast daemon {start|stop|status|attach}")
 
 
 def _cmd_attach():

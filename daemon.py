@@ -4,7 +4,7 @@ Usage:
     steamcast daemon start
     steamcast daemon stop
     steamcast daemon status
-    steamcast attach
+    steamcast daemon attach
 
 Architecture:
     ┌─ steamcast daemon start
@@ -19,7 +19,7 @@ Architecture:
     ├─ steamcast daemon status
     │   GET /status from daemon → prints JSON to console
     │
-    └─ steamcast attach
+    └─ steamcast daemon attach
         GET /status + GET /logs from daemon → live TUI
 """
 

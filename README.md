@@ -151,7 +151,7 @@ steamcast daemon status
 #   dreadout  🟢 LIVE  5000k
 
 # Live read-only dashboard — Ctrl+C to detach, daemon keeps running
-steamcast attach
+steamcast daemon attach
 
 # Graceful stop
 steamcast daemon stop
@@ -173,7 +173,7 @@ steamcast daemon stop
 }
 ```
 
-> 💡 **Tip:** Run `steamcast daemon start` inside `tmux` on your server. Then from any SSH session (even mobile), `steamcast attach` shows the live dashboard. `steamcast daemon stop` stops everything cleanly.
+> 💡 **Tip:** Run `steamcast daemon start` inside `tmux` on your server. Then from any SSH session (even mobile), `steamcast daemon attach` shows the live dashboard. `steamcast daemon stop` stops everything cleanly.
 
 ---
 
