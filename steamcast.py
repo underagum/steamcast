@@ -2573,11 +2573,11 @@ def show_daemon_menu():
         return
 
     while True:
-        st = cmd_status()
-        running = st.get("running", False)
-
         banner()
         console.print("[bold yellow]=== DAEMON MANAGER ===[/]\n")
+
+        st = cmd_status()
+        running = st.get("running", False)
 
         if running:
             pid = st.get("pid", "?")

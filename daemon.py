@@ -260,7 +260,7 @@ class DaemonManager:
         # Try to get detailed status from the HTTP API
         try:
             import urllib.request
-            resp = urllib.request.urlopen(f"http://127.0.0.1:{DEFAULT_PORT}/status", timeout=3)
+            resp = urllib.request.urlopen(f"http://127.0.0.1:{DEFAULT_PORT}/status", timeout=1)
             return json.loads(resp.read().decode())
         except Exception:
             # Daemon is running but API unreachable (still starting up?)

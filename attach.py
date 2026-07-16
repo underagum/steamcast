@@ -25,7 +25,7 @@ DAEMON_STATUS_URL = f"http://127.0.0.1:{DAEMON_PORT}/status"
 DAEMON_LOGS_URL = f"http://127.0.0.1:{DAEMON_PORT}/logs?n=10"
 
 
-def _fetch(url: str, timeout: int = 3) -> dict | None:
+def _fetch(url: str, timeout: int = 2) -> dict | None:
     try:
         resp = urllib.request.urlopen(url, timeout=timeout)
         return json.loads(resp.read().decode())
