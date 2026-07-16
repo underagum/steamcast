@@ -2450,9 +2450,31 @@ def version_check():
 def show_main_menu():
     """Main menu loop."""
     version_check()
+    _last_daemon_check = 0.0
+    _cached_daemon_status = None
 
     while True:
         banner()
+
+        # ── Daemon status line (cached 3s) ──
+        now = time.time()
+        if now - _last_daemon_check > 3:
+            try:
+                from daemon import cmd_status
+                _cached_daemon_status = cmd_status()
+                _last_daemon_check = now
+            except Exception:
+                pass
+        ds = _cached_daemon_status
+        if ds and ds.get("running"):
+            pid = ds.get("pid", "?")
+            uptime = ds.get("uptime", "?")
+            streams = len(ds.get("streams", []))
+            console.print(f"  [cyan]🔵 Daemon ACTIVE[/]  [dim]PID {pid}, uptime {uptime}, {streams} stream(s)[/]")
+        else:
+            console.print(f"  [dim]⚪ Daemon inactive — use [cyan]4[/] to manage[/]")
+        console.print()
+
         console.print("  [white][1][/] [bold]Prepare Videos (PREP)[/]")
         console.print("       [dim]Convert + concatenate videos[/]")
         console.print()
@@ -2462,6 +2484,9 @@ def show_main_menu():
         console.print("  [white][3][/] [bold]Setup (RTMP Keys)[/]")
         console.print("       [dim]Add or edit game names and stream keys[/]")
         console.print()
+        console.print("  [white][4][/] [bold]Daemon Manager[/]")
+        console.print("       [dim]Background stream daemon (Linux)[/]")
+        console.print()
         console.print("  [red][Q][/] Quit")
         console.print()
 
@@ -2470,17 +2495,26 @@ def show_main_menu():
         else:
             choice = input("Select option: ").strip().lower()
 
+        valid = {"1", "2", "3", "4", "q"}
+        if choice in valid:
+            pass
+        elif not choice:
+            continue
+        else:
+            console.print("[yellow]Invalid option.[/]")
+            continue
+
         if choice == "1":
             show_prep_phase()
         elif choice == "2":
             show_cast()
         elif choice == "3":
             show_cast_setup()
+        elif choice == "4":
+            show_daemon_menu()
         elif choice == "q":
             console.print("\n[green]Goodbye![/]")
             break
-        else:
-            console.print("[yellow]Invalid option.[/]")
 
 
 # ─── Entry Point ─────────────────────────────────────────────────────
@@ -2529,6 +2563,120 @@ def setup_crash_logging():
     atexit.register(_kill_orphans)
 
 
+def show_daemon_menu():
+    """Submenu for managing the SteamCast daemon."""
+    import time
+    try:
+        from daemon import cmd_start, cmd_stop, cmd_status, load_config, DaemonError
+    except ImportError:
+        console.print("[red]Daemon module not available (Linux only).[/]")
+        return
+
+    while True:
+        banner()
+        console.print("[bold yellow]=== DAEMON MANAGER ===[/]\n")
+
+        st = cmd_status()
+        running = st.get("running", False)
+
+        if running:
+            pid = st.get("pid", "?")
+            uptime = st.get("uptime", "?")
+            streams = st.get("streams", [])
+            live = sum(1 for s in streams if s.get("status") == "LIVE")
+            dead = sum(1 for s in streams if s.get("status") == "DEAD")
+
+            console.print(f"  [cyan]🔵 Daemon ACTIVE[/]  [dim]PID {pid} • uptime {uptime}[/]")
+            console.print(f"  [dim]Streams: {len(streams)} total ({live} live, {dead} dead)[/]")
+            console.print()
+
+            if streams:
+                console.print(f"  {'Game':<25} {'Status':<10} {'Bitrate':<10} {'PID':<8}")
+                console.print(f"  {'─'*24} {'─'*9} {'─'*9} {'─'*7}")
+                for s in streams:
+                    name = s.get("name", "?")[:24]
+                    sts = s.get("status", "?")
+                    bit = s.get("bitrate", "?")
+                    spid = str(s.get("pid", "")) or "-"
+                    icon = "🟢" if sts == "LIVE" else ("🔴" if sts == "DEAD" else "⚪")
+                    console.print(f"  {name:<25} {icon} {sts:<7} {bit:<10} {spid:<8}")
+                console.print()
+
+            console.print("  [white][1][/] Attach live dashboard")
+            console.print("       [dim]Read-only TUI, Ctrl+C to detach[/]")
+            console.print("  [white][2][/] Stop daemon")
+            console.print("       [dim]Gracefully stops all streams[/]")
+            console.print("  [white][3][/] Restart daemon")
+            console.print("       [dim]Stop then start[/]")
+        else:
+            console.print("  [dim]⚪ Daemon is not running[/]")
+            console.print()
+            console.print("  [white][1][/] Start daemon")
+            console.print("       [dim]Headless background stream manager[/]")
+
+        console.print("  [red][Q][/] Back to main menu")
+        console.print()
+
+        if RICH:
+            choice = Prompt.ask("[cyan]Select option[/]", default="q").strip().lower()
+        else:
+            choice = input("Select option: ").strip().lower()
+
+        if not choice:
+            continue
+
+        if running:
+            valid = {"1", "2", "3", "q"}
+        else:
+            valid = {"1", "q"}
+        if choice not in valid:
+            if not choice:
+                continue
+            console.print("[yellow]Invalid option.[/]")
+            continue
+
+        if choice == "1":
+            if running:
+                # Attach
+                from attach import attach as _attach
+                _attach()
+            else:
+                # Start
+                console.print("\nStarting daemon...")
+                try:
+                    cfg = load_config()
+                    cmd_start(cfg)
+                except DaemonError as e:
+                    console.print(f"[red]✗ {e}[/]")
+                except KeyboardInterrupt:
+                    console.print("\n[yellow]Start cancelled.[/]")
+                else:
+                    console.print("[green]Daemon started.[/]")
+
+        elif choice == "2" and running:
+            console.print("\nStopping daemon...")
+            try:
+                cmd_stop()
+                console.print("[green]✅ Daemon stopped.[/]")
+            except DaemonError as e:
+                console.print(f"[red]✗ {e}[/]")
+
+        elif choice == "3" and running:
+            console.print("\nRestarting daemon...")
+            try:
+                cmd_stop()
+                time.sleep(1)
+                cfg = load_config()
+                cmd_start(cfg)
+            except DaemonError as e:
+                console.print(f"[red]✗ {e}[/]")
+            else:
+                console.print("[green]✅ Daemon restarted.[/]")
+
+        elif choice == "q":
+            break
+
+
 def main():
     check_prerequisites()
     setup_crash_logging()
@@ -2537,6 +2685,10 @@ def main():
 
         if cmd == "prep":
             show_prep_phase()
+        elif cmd == "daemon":
+            _cmd_daemon()
+        elif cmd == "attach":
+            _cmd_attach()
         elif cmd == "setup":
             show_cast_setup()
         elif cmd == "cast":
@@ -2545,6 +2697,51 @@ def main():
             show_main_menu()
     else:
         show_main_menu()
+
+
+def _cmd_daemon():
+    """Handle 'steamcast daemon start|stop|status'."""
+    from daemon import cmd_start, cmd_stop, cmd_status, load_config, DaemonError
+
+    sub = sys.argv[2].lower() if len(sys.argv) > 2 else "status"
+
+    if sub == "start":
+        config = load_config()
+        print("Starting SteamCast daemon...")
+        cmd_start(config)
+    elif sub == "stop":
+        cmd_stop()
+    elif sub == "status":
+        st = cmd_status()
+        if st.get("running"):
+            pid = st.get("pid", "?")
+            uptime = st.get("uptime", "?")
+            print(f"🔵 Daemon is running (PID {pid}, uptime {uptime})")
+            print()
+            streams = st.get("streams", [])
+            if streams:
+                print(f"  {'Game':<25} {'Status':<10} {'Bitrate':<10}")
+                print(f"  {'─'*24} {'─'*9} {'─'*9}")
+                for s in streams:
+                    name = s.get("name", "?")[:24]
+                    sts = s.get("status", "?")
+                    bit = s.get("bitrate", "?")
+                    icon = "🟢" if sts == "LIVE" else ("🔴" if sts == "DEAD" else "⚪")
+                    print(f"  {name:<25} {icon} {sts:<7} {bit:<10}")
+            else:
+                print("  No active streams.")
+        else:
+            print("⚪ Daemon is not running.")
+            print("   Use: steamcast daemon start")
+    else:
+        print(f"Unknown daemon subcommand: {sub}")
+        print("Usage: steamcast daemon {start|stop|status}")
+
+
+def _cmd_attach():
+    """Handle 'steamcast attach'."""
+    from attach import attach as _attach
+    _attach()
 
 
 if __name__ == "__main__":
