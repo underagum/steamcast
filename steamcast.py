@@ -2450,23 +2450,29 @@ def version_check():
 def show_main_menu():
     """Main menu loop."""
     version_check()
+    _last_daemon_check = 0.0
+    _cached_daemon_status = None
 
     while True:
         banner()
 
-        # ── Daemon status line ──
-        try:
-            from daemon import cmd_status
-            ds = cmd_status()
-            if ds.get("running"):
-                pid = ds.get("pid", "?")
-                uptime = ds.get("uptime", "?")
-                streams = len(ds.get("streams", []))
-                console.print(f"  [cyan]🔵 Daemon ACTIVE[/]  [dim]PID {pid}, uptime {uptime}, {streams} stream(s)[/]")
-            else:
-                console.print(f"  [dim]⚪ Daemon inactive — use [cyan]4[/] to manage[/]")
-        except Exception:
-            pass  # daemon module not available or import failed
+        # ── Daemon status line (cached 3s) ──
+        now = time.time()
+        if now - _last_daemon_check > 3:
+            try:
+                from daemon import cmd_status
+                _cached_daemon_status = cmd_status()
+                _last_daemon_check = now
+            except Exception:
+                pass
+        ds = _cached_daemon_status
+        if ds and ds.get("running"):
+            pid = ds.get("pid", "?")
+            uptime = ds.get("uptime", "?")
+            streams = len(ds.get("streams", []))
+            console.print(f"  [cyan]🔵 Daemon ACTIVE[/]  [dim]PID {pid}, uptime {uptime}, {streams} stream(s)[/]")
+        else:
+            console.print(f"  [dim]⚪ Daemon inactive — use [cyan]4[/] to manage[/]")
         console.print()
 
         console.print("  [white][1][/] [bold]Prepare Videos (PREP)[/]")
@@ -2489,7 +2495,13 @@ def show_main_menu():
         else:
             choice = input("Select option: ").strip().lower()
 
-        if not choice:
+        valid = {"1", "2", "3", "4", "q"}
+        if choice in valid:
+            pass
+        elif not choice:
+            continue
+        else:
+            console.print("[yellow]Invalid option.[/]")
             continue
 
         if choice == "1":
@@ -2503,8 +2515,6 @@ def show_main_menu():
         elif choice == "q":
             console.print("\n[green]Goodbye![/]")
             break
-        else:
-            console.print("[yellow]Invalid option.[/]")
 
 
 # ─── Entry Point ─────────────────────────────────────────────────────
