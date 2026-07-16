@@ -1,6 +1,6 @@
 # SteamCast
 
-> Put your game videos on your Steam store pages. 24/7. No OBS, no server, no fuss.
+> Put your game videos on your Steam store pages. 24/7. No OBS, no fuss.
 
 SteamCast is a lightweight broadcasting tool for game developers and publishers who want looping video on their Steam store during sales, festivals, or just because it looks good. **Download the `.exe`, drop in your videos, paste your RTMP keys, and you're live.** Near-zero CPU overhead because it uses `-c copy`. No re-encoding at broadcast time.
 
@@ -228,11 +228,11 @@ All of this is created on first run.
 
 ## FAQ
 
-**Do I need Python?**
+**Do I need Python or download anything else?**
 Not if you use the `.exe`. It bundles Python, Rich, and psutil into a single file. FFmpeg auto-downloads on first run.
 
 **Can I broadcast multiple games at once?**
-Yes. Each game gets its own ffmpeg process. Toggle them in the CAST menu.
+Yes, It's the sole purpose of SteamCast. Each game gets its own ffmpeg process. Toggle them in the CAST menu.
 
 **My streams show SLOW/CONG/CRIT in the dashboard. What's wrong?**
 Your upload bandwidth is saturated. The dashboard detects this from ffmpeg's `speed=` metric — same principle as OBS dropped frames. SteamCast shows per-stream health (green/yellow/orange/red) and a footer warning when any stream falls behind. Fix: run fewer concurrent streams, or lower the PREP bitrate. 8 streams at 5 Mbps = 40 Mbps continuous. Most home connections can't sustain that.
