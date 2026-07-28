@@ -14,7 +14,7 @@ import os
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
 # Add project root to path for steamcast imports
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -141,8 +141,8 @@ class SteamCastGUI:
         btn_frame = ttk.Frame(tab)
         btn_frame.pack(padx=20, pady=10, fill="x")
 
-        ttk.Button(btn_frame, text="Add Game", command=self._add_game).pack(side="left", padx=(0, 8))
-        ttk.Button(btn_frame, text="Paste Key", command=self._paste_key).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_frame, text="Add Game", command=lambda: self._game_dialog()).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_frame, text="Edit", command=self._edit_game).pack(side="left", padx=(0, 8))
         ttk.Button(btn_frame, text="Remove", command=self._remove_game).pack(side="left")
 
     def _refresh_tree(self):
@@ -156,10 +156,15 @@ class SteamCastGUI:
             masked = rtmp[:12] + "…" if len(rtmp) > 12 else rtmp
             self.tree.insert("", "end", values=(gname, masked, active))
 
-    def _add_game(self):
-        """Open dialog to add a new game with RTMP key."""
+    def _game_dialog(self, edit_name: str | None = None):
+        """Open dialog to add or edit a game and its RTMP key."""
+        is_edit = edit_name is not None
+        existing_key = ""
+        if is_edit:
+            existing_key = self.config["games"].get(edit_name, {}).get("rtmp_key", "")
+
         dialog = tk.Toplevel(self.root)
-        dialog.title("Add Game")
+        dialog.title("Edit Game" if is_edit else "Add Game")
         dialog.geometry("400x150")
         dialog.resizable(False, False)
         dialog.transient(self.root)
@@ -168,46 +173,41 @@ class SteamCastGUI:
         tk.Label(dialog, text="Game name:", font=("Segoe UI", 9)).pack(pady=(15, 0))
         name_entry = tk.Entry(dialog, width=45)
         name_entry.pack(pady=(2, 5))
+        if is_edit:
+            name_entry.insert(0, edit_name)
         name_entry.focus_set()
 
         tk.Label(dialog, text="RTMP key:", font=("Segoe UI", 9)).pack()
         key_entry = tk.Entry(dialog, width=45, show="•")
         key_entry.pack(pady=(2, 10))
+        if existing_key:
+            key_entry.insert(0, existing_key)
 
         def _save():
-            gname = name_entry.get().strip()
+            new_name = name_entry.get().strip()
             rtmp = key_entry.get().strip()
-            if not gname:
+            if not new_name:
                 return
-            self.config.setdefault("games", {})[gname] = {
-                "rtmp_key": rtmp,
-                "active": False,
-            }
+            games = self.config.setdefault("games", {})
+            if is_edit and new_name != edit_name:
+                games.pop(edit_name, None)
+            games[new_name] = {"rtmp_key": rtmp, "active": games.get(new_name, {}).get("active", False)}
             self._save_config()
             self._refresh_tree()
-            self._set_status(f"Added: {gname}")
+            self._set_status(f"{'Updated' if is_edit else 'Added'}: {new_name}")
             dialog.destroy()
 
-        ttk.Button(dialog, text="Add", command=_save).pack()
+        ttk.Button(dialog, text="Save", command=_save).pack()
         dialog.bind("<Return>", lambda e: _save())
 
-    def _paste_key(self):
-        """Paste RTMP key from clipboard into selected row."""
+    def _edit_game(self):
+        """Open edit dialog for selected game."""
         selected = self.tree.selection()
         if not selected:
             messagebox.showwarning("No Selection", "Select a game row first.")
             return
-        try:
-            clipboard = self.root.clipboard_get()
-        except tk.TclError:
-            messagebox.showwarning("Clipboard Empty", "Copy an RTMP key first.")
-            return
-
         gname = self.tree.item(selected[0], "values")[0]
-        self.config["games"][gname]["rtmp_key"] = clipboard
-        self._save_config()
-        self._refresh_tree()
-        self._set_status(f"Key pasted for: {gname}")
+        self._game_dialog(edit_name=gname)
 
     def _remove_game(self):
         """Remove selected game from config and tree."""
