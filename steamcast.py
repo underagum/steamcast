@@ -2690,7 +2690,63 @@ def show_daemon_menu():
             break
 
 
+def _setup_windows_console():
+    """Configure Windows console for friendlier user experience.
+
+    On Windows .exe builds:
+      - Ctrl+C no longer kills the app → use Q to quit instead
+      - Ctrl+V pastes clipboard text (Windows 10+)
+      - Mouse select + right-click copies text (QuickEdit mode)
+      - Escape key still bubbles through Rich (no SIGINT)
+
+    Linux/macOS: no-op — terminal defaults are fine.
+    """
+    if sys.platform != "win32":
+        return
+
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        STD_INPUT_HANDLE = -10
+        ENABLE_PROCESSED_INPUT = 0x0001
+        ENABLE_QUICK_EDIT_MODE = 0x0040
+        ENABLE_EXTENDED_FLAGS = 0x0080
+
+        h = kernel32.GetStdHandle(STD_INPUT_HANDLE)
+        if h == -1:
+            return  # no console (e.g. piped input)
+
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(h, ctypes.byref(mode)):
+            return
+
+        # Disable processed input → Ctrl+C becomes regular keystroke,
+        # not a SIGINT signal. The app's crash handler won't fire.
+        # Enable QuickEdit (mouse copy) + extended flags (Ctrl+V paste).
+        new_mode = mode.value & ~ENABLE_PROCESSED_INPUT
+        new_mode |= ENABLE_QUICK_EDIT_MODE | ENABLE_EXTENDED_FLAGS
+        kernel32.SetConsoleMode(h, new_mode)
+
+        # Also fix the output handle — enable virtual terminal sequences
+        # for ANSI/color support (Rich needs this on older Windows)
+        STDOUT_HANDLE = -11
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        ho = kernel32.GetStdHandle(STDOUT_HANDLE)
+        if ho != -1:
+            omode = ctypes.c_uint32()
+            if kernel32.GetConsoleMode(ho, ctypes.byref(omode)):
+                kernel32.SetConsoleMode(
+                    ho,
+                    omode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+                )
+
+    except Exception:
+        pass  # non-critical — app still works with SIGINT behavior
+
+
 def main():
+    _setup_windows_console()
     check_prerequisites()
     setup_crash_logging()
     if len(sys.argv) > 1:
