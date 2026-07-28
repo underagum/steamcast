@@ -282,3 +282,7 @@ If SteamCast helps your studio, support us by:
 ## License
 
 MIT. Free to use, modify, and share.
+
+---
+
+*Built with assistance from Aigis, an AI agent (DeepSeek, OpenAI, Anthropic) via Nous Research's Hermes framework. Human-shaped, AI-accelerated.*
