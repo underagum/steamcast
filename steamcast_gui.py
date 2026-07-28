@@ -243,7 +243,7 @@ class SteamCastGUI:
 
         ttk.Label(
             tab,
-            text="Drop video files into the input folder, then click CONVERT.",
+            text="Drop video files into the input folder — detected automatically.",
             font=("Segoe UI", 9),
             foreground="#aaaaaa",
         ).pack(pady=(15, 5), padx=20, anchor="w")
@@ -251,31 +251,30 @@ class SteamCastGUI:
         # Show paths
         paths_frame = ttk.Frame(tab)
         paths_frame.pack(padx=20, pady=(0, 5), fill="x")
-        ttk.Label(paths_frame, text=f"📁 Input:", font=("Segoe UI", 8), foreground="#888").pack(side="left")
+        ttk.Label(paths_frame, text="📁 Input:", font=("Segoe UI", 8), foreground="#888").pack(side="left")
         ttk.Label(paths_frame, text=str(self.input_dir), font=("Segoe UI", 8), foreground="#666").pack(side="left", padx=(5, 0))
-        ttk.Label(paths_frame, text=f"  📁 Output:", font=("Segoe UI", 8), foreground="#888").pack(side="left", padx=(20, 0))
+        ttk.Label(paths_frame, text="  📁 Output:", font=("Segoe UI", 8), foreground="#888").pack(side="left", padx=(20, 0))
         ttk.Label(paths_frame, text=str(self.output_dir), font=("Segoe UI", 8), foreground="#666").pack(side="left", padx=(5, 0))
 
-        file_frame = ttk.Frame(tab)
-        file_frame.pack(padx=20, pady=5, fill="x")
+        # Detected games treeview
+        prep_cols = ("Game", "Files", "Status")
+        self.prep_tree = ttk.Treeview(tab, columns=prep_cols, show="headings", height=8)
+        self.prep_tree.heading("Game", text="Game")
+        self.prep_tree.heading("Files", text="Files")
+        self.prep_tree.heading("Status", text="Status")
+        self.prep_tree.column("Game", width=200)
+        self.prep_tree.column("Files", width=100)
+        self.prep_tree.column("Status", width=250)
+        self.prep_tree.pack(padx=20, pady=5, fill="x")
 
-        self.file_list = tk.Listbox(
-            file_frame,
-            bg="#2a2a4a",
-            fg="#cccccc",
-            selectbackground="#5555aa",
-            height=6,
-        )
-        self.file_list.pack(side="left", fill="both", expand=True)
+        # Refresh button
+        ttk.Button(tab, text="↻ Refresh", command=self._scan_input).pack(pady=(0, 5))
 
-        ttk.Button(file_frame, text="Browse", command=self._browse_files).pack(
-            side="right", padx=(10, 0)
-        )
-
+        # Bitrate selector
         bitrate_frame = ttk.Frame(tab)
         bitrate_frame.pack(padx=20, pady=10, fill="x")
 
-        ttk.Label(bitrate_frame, text="Bitrate:", font=("Segoe UI", 9)).pack(side="left")
+        ttk.Label(bitrate_frame, text="Encoding bitrate:", font=("Segoe UI", 9)).pack(side="left")
         self.bitrate_var = tk.StringVar(value="5000k")
         ttk.OptionMenu(
             bitrate_frame,
@@ -288,7 +287,8 @@ class SteamCastGUI:
             "7000k",
         ).pack(side="left", padx=(10, 0))
 
-        ttk.Button(tab, text="CONVERT", command=self._run_prep).pack(pady=(5, 5))
+        # Progress + convert button
+        ttk.Button(tab, text="⚡ CONVERT ALL", command=self._run_prep).pack(pady=(5, 5))
 
         self.prep_progress = ttk.Progressbar(
             tab, orient="horizontal", length=300, mode="determinate"
@@ -305,16 +305,71 @@ class SteamCastGUI:
         )
         self.prep_log.pack(padx=20, pady=5, fill="x")
 
-    def _browse_files(self):
-        """Open file picker for video files."""
-        files = filedialog.askopenfilenames(
-            title="Select video files",
-            filetypes=[("Video files", "*.mp4 *.mkv *.avi *.mov *.webm"), ("All files", "*.*")],
-        )
-        for f in files:
-            self.file_list.insert("end", f)
-        if files:
-            self._set_status(f"{len(files)} file(s) selected")
+        # Initial scan
+        self._scan_input()
+
+        # Auto-refresh when tab is selected
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_change)
+
+    def _on_tab_change(self, event):
+        """Auto-scan when switching to PREP tab."""
+        tab_id = self.notebook.select()
+        tab_text = self.notebook.tab(tab_id, "text")
+        if tab_text == "PREP":
+            self._scan_input()
+
+    def _scan_input(self):
+        """Scan input/ folder and populate the PREP treeview."""
+        # Import steamcast internals for consistent detection
+        try:
+            from steamcast import VIDEO_EXTENSIONS, parse_game_name, sanitize_filename
+        except ImportError:
+            VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".webm", ".flv", ".m4v"}
+
+            def parse_game_name(filename):
+                import re
+                m = re.match(r"^(.+?)(?:_(\d+))?\.\w+$", filename, re.IGNORECASE)
+                if not m:
+                    return filename.rsplit(".", 1)[0], 0, False
+                return m.group(1), int(m.group(2) or 1), bool(m.group(2))
+
+            def sanitize_filename(name):
+                return "".join(c if c.isalnum() or c in " _-" else "_" for c in name)
+
+        # Clear tree
+        for item in self.prep_tree.get_children():
+            self.prep_tree.delete(item)
+
+        # Scan input/ for video files
+        video_files: list[Path] = []
+        for ext in VIDEO_EXTENSIONS:
+            video_files.extend(self.input_dir.rglob(f"*{ext}"))
+            video_files.extend(self.input_dir.rglob(f"*{ext.upper()}"))
+        video_files = sorted(set(video_files))
+
+        if not video_files:
+            self.prep_tree.insert("", "end", values=(
+                "—", "No video files found", f"Drop files into {self.input_dir.name}/"
+            ))
+            self._set_status("No videos in input/ folder")
+            return
+
+        # Group by game name
+        game_groups: dict[str, list[Path]] = {}
+        for f in video_files:
+            gname, _, _ = parse_game_name(f.name)
+            game_groups.setdefault(gname, []).append(f)
+
+        # Populate treeview
+        for gname in sorted(game_groups):
+            files = sorted(game_groups[gname], key=lambda f: f.name)
+            safe = sanitize_filename(gname)
+            out_path = self.output_dir / f"{safe}.mp4"
+            action = f"convert + concat ({len(files)} files)" if len(files) > 1 else "convert only"
+            status = "✅ Ready" if out_path.exists() else "🔄 Needs conversion"
+            self.prep_tree.insert("", "end", values=(gname, action, status))
+
+        self._set_status(f"{len(video_files)} file(s) across {len(game_groups)} game(s)")
 
     def _run_prep(self):
         """Placeholder — PREP not wired yet."""
