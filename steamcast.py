@@ -2833,9 +2833,10 @@ def _cmd_daemon():
 
 def _install_systemd_service():
     """Install SteamCast as a systemd system service (survives reboot)."""
-    import os
-    import shutil
-    import subprocess
+    if sys.platform == "win32":
+        print("❌ systemd is Linux-only. Windows daemon support is not yet available.")
+        print("   Use 'steamcast cast' for interactive streaming instead.")
+        return
 
     # Detect paths
     launcher = shutil.which("steamcast")
@@ -2878,7 +2879,7 @@ WantedBy=multi-user.target
         print("🔐 sudo required for system-level install.")
         subprocess.run(
             ["sudo", "tee", "/etc/systemd/system/steamcast.service"],
-            input=unit, text=True, check=True, capture_output=True,
+            input=unit, text=True, check=True,
         )
 
         # 2. Reload systemd
@@ -2908,8 +2909,9 @@ WantedBy=multi-user.target
 
 def _uninstall_systemd_service():
     """Remove SteamCast systemd service (stop, disable, delete)."""
-    import os
-    import subprocess
+    if sys.platform == "win32":
+        print("❌ No systemd service on Windows.")
+        return
 
     unit_path = "/etc/systemd/system/steamcast.service"
     if not os.path.exists(unit_path):
