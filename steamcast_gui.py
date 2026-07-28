@@ -248,6 +248,16 @@ class SteamCastGUI:
             foreground="#aaaaaa",
         ).pack(pady=(15, 5), padx=20, anchor="w")
 
+        # Naming guide
+        info_text = (
+            "Naming:  gamename.mp4 (single)   |   gamename_1.mp4, gamename_2.mp4 (multi-part)\n"
+            "Output:  H.264, AAC, 1080p30, CBR at selected bitrate. Ready for Steam broadcast."
+        )
+        ttk.Label(
+            tab, text=info_text,
+            font=("Segoe UI", 8), foreground="#666666",
+        ).pack(padx=20, pady=(0, 5), anchor="w")
+
         # Show paths
         paths_frame = ttk.Frame(tab)
         paths_frame.pack(padx=20, pady=(0, 5), fill="x")
@@ -352,6 +362,7 @@ class SteamCastGUI:
                 "—", "No video files found", f"Drop files into {self.input_dir.name}/"
             ))
             self._set_status("No videos in input/ folder")
+            self.prep_games = {}
             return
 
         # Group by game name
@@ -359,6 +370,8 @@ class SteamCastGUI:
         for f in video_files:
             gname, _, _ = parse_game_name(f.name)
             game_groups.setdefault(gname, []).append(f)
+
+        self.prep_games = game_groups  # store for _run_prep
 
         # Populate treeview
         for gname in sorted(game_groups):
@@ -372,9 +385,218 @@ class SteamCastGUI:
         self._set_status(f"{len(video_files)} file(s) across {len(game_groups)} game(s)")
 
     def _run_prep(self):
-        """Placeholder — PREP not wired yet."""
-        self.prep_log.insert("end", "🔍 PREP not wired yet — coming in Phase 2\n")
+        """Run ffmpeg conversion for all detected game groups (background thread)."""
+        if not self.prep_games:
+            messagebox.showwarning("No Videos", "Drop video files into the input folder first.")
+            return
+
+        # Disable convert button during run
+        for child in self.root.winfo_children():
+            if isinstance(child, ttk.Frame):
+                for w in child.winfo_children():
+                    if isinstance(w, ttk.Button) and "CONVERT" in (w.cget("text") or ""):
+                        w.config(state="disabled")
+
+        self.prep_log.delete("1.0", "end")
         self.prep_progress["value"] = 0
+        self._prep_queue = []  # thread-safe log queue
+        self._prep_running = True
+
+        import threading
+        t = threading.Thread(target=self._prep_worker, daemon=True)
+        t.start()
+        self._prep_poll_queue()
+
+    def _prep_log_to_gui(self, text: str):
+        """Called from worker thread or poll loop — thread-safe via root.after."""
+        self.prep_log.insert("end", text)
+        self.prep_log.see("end")
+
+    def _prep_poll_queue(self):
+        """Poll the worker's log queue and push to GUI every 100ms."""
+        while self._prep_queue:
+            msg = self._prep_queue.pop(0)
+            self._prep_log_to_gui(msg)
+        if self._prep_running:
+            self.root.after(100, self._prep_poll_queue)
+        else:
+            # Re-enable convert button
+            for child in self.root.winfo_children():
+                if isinstance(child, ttk.Frame):
+                    for w in child.winfo_children():
+                        if isinstance(w, ttk.Button) and "CONVERT" in (w.cget("text") or ""):
+                            w.config(state="normal")
+            self._scan_input()
+
+    def _prep_worker(self):
+        """Background thread: run ffmpeg conversion for each game group."""
+        try:
+            from steamcast import (
+                convert_video, concat_videos, detect_encoder, find_ffmpeg,
+                sanitize_filename, get_video_duration, has_audio_stream,
+                LOG_DIR,
+            )
+            from pathlib import Path as _Path
+            import uuid, shutil, subprocess, re as _re
+
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+            # Find ffmpeg
+            ffmpeg = find_ffmpeg()
+            if not ffmpeg:
+                self._prep_queue.append("❌ FFmpeg not found.\n")
+                self._prep_running = False
+                return
+
+            # Detect encoder
+            enc = detect_encoder(None)  # None = no rich console
+            if enc is None:
+                self._prep_queue.append("❌ No usable encoder found.\n")
+                self._prep_running = False
+                return
+
+            bitrate = self.bitrate_var.get().replace("k", "")
+            from steamcast import SPEC
+            SPEC.video_bitrate = f"{bitrate}k"
+
+            total_groups = len(self.prep_games)
+            group_idx = 0
+            success_count = 0
+            fail_count = 0
+            cancelled = False
+
+            for gname in sorted(self.prep_games):
+                if not self._prep_running:
+                    cancelled = True
+                    break
+
+                files = sorted(self.prep_games[gname], key=lambda f: f.name)
+                safe_name = sanitize_filename(gname)
+                out_path = self.output_dir / f"{safe_name}.mp4"
+                group_idx += 1
+
+                # Skip if already exists
+                if out_path.exists():
+                    self._prep_queue.append(f"⏭ {gname} — already exists, skipping\n")
+                    self.prep_progress["value"] = (group_idx / total_groups) * 100
+                    success_count += 1
+                    continue
+
+                if len(files) == 1:
+                    # ── Single file ──
+                    prep_log = LOG_DIR / f"{safe_name}_prep.log"
+                    has_audio = has_audio_stream(files[0])
+                    dur = get_video_duration(files[0])
+                    self._prep_queue.append(f"🎬 {gname} ({dur}) — converting...\n")
+
+                    def on_progress(raw):
+                        self._prep_queue.append(raw + "\n")
+
+                    try:
+                        ok = convert_video(files[0], out_path, enc,
+                                          log_file=prep_log,
+                                          on_progress=on_progress,
+                                          has_audio=has_audio)
+                    except Exception as e:
+                        self._prep_queue.append(f"  ❌ Error: {e}\n")
+                        ok = False
+
+                    if ok:
+                        self._prep_queue.append(f"  ✅ {gname} converted\n")
+                        success_count += 1
+                    else:
+                        self._prep_queue.append(f"  ❌ Failed: {gname} \n")
+                        fail_count += 1
+
+                else:
+                    # ── Multi-file: convert each part, then concat ──
+                    temp_dir = self.input_dir / f".temp_{uuid.uuid4().hex[:8]}"
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+
+                    has_audio = has_audio_stream(files[0])
+                    converted_parts = []
+                    all_ok = True
+
+                    for idx, f in enumerate(files, 1):
+                        if not self._prep_running:
+                            cancelled = True
+                            break
+
+                        temp_out = temp_dir / f"{f.stem}_steam.mp4"
+                        part_log = LOG_DIR / f"{safe_name}_part{idx}_prep.log"
+                        self._prep_queue.append(f"  🎬 Part {idx}/{len(files)}: {f.name}...\n")
+
+                        def on_progress(raw):
+                            self._prep_queue.append(raw + "\n")
+
+                        try:
+                            ok = convert_video(f, temp_out, enc,
+                                              log_file=part_log,
+                                              on_progress=on_progress,
+                                              has_audio=has_audio)
+                        except Exception as e:
+                            self._prep_queue.append(f"    ❌ Error: {e}\n")
+                            ok = False
+
+                        if ok:
+                            self._prep_queue.append(f"    ✅ Part {idx} done\n")
+                            converted_parts.append(temp_out)
+                        else:
+                            self._prep_queue.append(f"    ❌ Part {idx} failed\n")
+                            all_ok = False
+                            break
+
+                    if not cancelled and all_ok:
+                        # Create playlist + concat
+                        playlist = temp_dir / "playlist.txt"
+                        with open(playlist, "w") as pf:
+                            for cf in converted_parts:
+                                pf.write(f"file '{str(cf).replace(chr(92), '/')}'\n")
+
+                        concat_log = LOG_DIR / f"{safe_name}_concat.log"
+                        self._prep_queue.append(f"  🔗 Concatenating {len(converted_parts)} parts...\n")
+
+                        def on_progress(raw):
+                            self._prep_queue.append(raw + "\n")
+
+                        try:
+                            ok = concat_videos(playlist, out_path, enc,
+                                              log_file=concat_log,
+                                              on_progress=on_progress,
+                                              has_audio=has_audio)
+                        except Exception as e:
+                            self._prep_queue.append(f"    ❌ Error: {e}\n")
+                            ok = False
+
+                        if ok:
+                            self._prep_queue.append(f"  ✅ {gname} ready ({len(files)} parts merged)\n")
+                            success_count += 1
+                        else:
+                            self._prep_queue.append(f"  ❌ Concat failed: {gname} \n")
+                            fail_count += 1
+                    elif cancelled:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        break
+                    else:
+                        fail_count += 1
+
+                    # Cleanup temp
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+
+                # Update progress bar
+                self.prep_progress["value"] = (group_idx / total_groups) * 100
+
+            # Summary
+            self._prep_queue.append(f"\n{'='*50}\n")
+            self._prep_queue.append(f"  ✅ {success_count} converted  |  ❌ {fail_count} failed")
+            if cancelled:
+                self._prep_queue.append("  ⚠ Cancelled")
+            self._prep_queue.append(f"\n  Output: {self.output_dir}\n")
+
+        except Exception as e:
+            self._prep_queue.append(f"\n❌ PREP error: {e}\n")
+        finally:
+            self._prep_running = False
 
     # ────────────────────────────────────────────────────────
     # Helpers
