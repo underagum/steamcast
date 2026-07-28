@@ -2544,6 +2544,10 @@ def setup_crash_logging():
 
     # Install global exception hook
     def _crash_handler(exc_type, exc_value, exc_tb):
+        if exc_type is KeyboardInterrupt:
+            print("\nGoodbye.", file=sys.stderr)
+            sys.exit(0)
+
         tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
         crash_logger.error("Unhandled exception:\n%s", tb_text)
         # Also print to stderr so it's visible in terminal
