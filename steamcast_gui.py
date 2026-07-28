@@ -67,10 +67,6 @@ class SteamCastGUI:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=15, pady=(0, 10))
 
-        # ── Tabs ──
-        self._build_setup_tab()
-        self._build_prep_tab()
-
         # ── Status bar ──
         self.status = ttk.Label(
             self.root,
@@ -78,6 +74,10 @@ class SteamCastGUI:
             font=("Segoe UI", 8),
         )
         self.status.pack(side="bottom", fill="x", padx=5, pady=3)
+
+        # ── Tabs ──
+        self._build_setup_tab()
+        self._build_prep_tab()
 
     # ────────────────────────────────────────────────────────
     # Config I/O
