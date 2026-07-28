@@ -26,8 +26,8 @@ class SteamCastGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("SteamCast")
-        self.root.geometry("800x680")
-        self.root.minsize(720, 560)
+        self.root.geometry("840x720")
+        self.root.minsize(720, 600)
         self.root.resizable(True, True)
 
         # ── Project root + folders ──
@@ -437,9 +437,17 @@ class SteamCastGUI:
                 sanitize_filename, get_video_duration, has_audio_stream,
                 LOG_DIR,
             )
-            from pathlib import Path as _Path
-            import uuid, shutil, subprocess, re as _re
+        except ImportError as e:
+            self._prep_queue.append(f"❌ Missing dependency: {e}\n")
+            self._prep_queue.append("   Run: pip install rich psutil\n")
+            self._prep_queue.append("   Then restart SteamCast.\n")
+            self._prep_running = False
+            return
 
+        from pathlib import Path as _Path
+        import uuid, shutil, subprocess, re as _re
+
+        try:
             LOG_DIR.mkdir(parents=True, exist_ok=True)
 
             # Find ffmpeg
@@ -548,7 +556,6 @@ class SteamCastGUI:
                             break
 
                     if not cancelled and all_ok:
-                        # Create playlist + concat
                         playlist = temp_dir / "playlist.txt"
                         with open(playlist, "w") as pf:
                             for cf in converted_parts:
@@ -581,13 +588,10 @@ class SteamCastGUI:
                     else:
                         fail_count += 1
 
-                    # Cleanup temp
                     shutil.rmtree(temp_dir, ignore_errors=True)
 
-                # Update progress bar
                 self.prep_progress["value"] = (group_idx / total_groups) * 100
 
-            # Summary
             self._prep_queue.append(f"\n{'='*50}\n")
             self._prep_queue.append(f"  ✅ {success_count} converted  |  ❌ {fail_count} failed")
             if cancelled:
