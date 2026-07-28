@@ -19,7 +19,7 @@ class SteamCastGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("SteamCast")
-        self.root.geometry("720×520")
+        self.root.geometry("720x520")
         self.root.resizable(True, True)
 
         # ── Style ──
