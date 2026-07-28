@@ -29,6 +29,13 @@ class SteamCastGUI:
         self.root.geometry("720x520")
         self.root.resizable(True, True)
 
+        # ── Project root + folders ──
+        self.project_dir = Path(__file__).resolve().parent
+        self.input_dir = self.project_dir / "input"
+        self.output_dir = self.project_dir / "output"
+        self.input_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
         # ── Load config ──
         self.config = self._load_config()
 
@@ -236,10 +243,18 @@ class SteamCastGUI:
 
         ttk.Label(
             tab,
-            text="Convert videos to Steam broadcast spec (H.264, AAC, 1080p30)",
+            text="Drop video files into the input folder, then click CONVERT.",
             font=("Segoe UI", 9),
             foreground="#aaaaaa",
         ).pack(pady=(15, 5), padx=20, anchor="w")
+
+        # Show paths
+        paths_frame = ttk.Frame(tab)
+        paths_frame.pack(padx=20, pady=(0, 5), fill="x")
+        ttk.Label(paths_frame, text=f"📁 Input:", font=("Segoe UI", 8), foreground="#888").pack(side="left")
+        ttk.Label(paths_frame, text=str(self.input_dir), font=("Segoe UI", 8), foreground="#666").pack(side="left", padx=(5, 0))
+        ttk.Label(paths_frame, text=f"  📁 Output:", font=("Segoe UI", 8), foreground="#888").pack(side="left", padx=(20, 0))
+        ttk.Label(paths_frame, text=str(self.output_dir), font=("Segoe UI", 8), foreground="#666").pack(side="left", padx=(5, 0))
 
         file_frame = ttk.Frame(tab)
         file_frame.pack(padx=20, pady=5, fill="x")
