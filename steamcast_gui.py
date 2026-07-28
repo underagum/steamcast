@@ -53,12 +53,11 @@ class SteamCastGUI:
         # ── Tabs ──
         self._build_setup_tab()
         self._build_prep_tab()
-        self._build_daemon_tab()
 
         # ── Status bar ──
         self.status = ttk.Label(
             self.root,
-            text="🔵 Daemon inactive | 0 streams",
+            text="Ready",
             font=("Segoe UI", 8),
         )
         self.status.pack(side="bottom", fill="x", padx=5, pady=3)
@@ -194,60 +193,6 @@ class SteamCastGUI:
         self.prep_log.insert("end", "🔍 Scanning input files...\n")
         self.prep_progress["value"] = 0
         messagebox.showinfo("PREP", "Would run: ffmpeg convert + concat (not wired yet)")
-
-    # ────────────────────────────────────────────────────────
-    # Tab 3: Daemon
-    # ────────────────────────────────────────────────────────
-
-    def _build_daemon_tab(self):
-        tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="Daemon")
-
-        ttk.Label(
-            tab,
-            text="Background streaming daemon — runs 24/7 without the GUI open",
-            font=("Segoe UI", 9),
-            foreground="#aaaaaa",
-        ).pack(pady=(15, 10), padx=20, anchor="w")
-
-        btn_frame = ttk.Frame(tab)
-        btn_frame.pack(padx=20, pady=10, fill="x")
-
-        ttk.Button(btn_frame, text="Start Daemon", command=self._daemon_start).pack(
-            side="left", padx=(0, 10)
-        )
-        ttk.Button(btn_frame, text="Stop Daemon", command=self._daemon_stop).pack(
-            side="left", padx=(0, 10)
-        )
-        ttk.Button(btn_frame, text="Live Dashboard", command=self._daemon_attach).pack(
-            side="left"
-        )
-
-        # Stream status preview
-        self.daemon_tree = ttk.Treeview(
-            tab,
-            columns=("Game", "Status", "Bitrate", "Uptime"),
-            show="headings",
-            height=6,
-        )
-        self.daemon_tree.heading("Game", text="Game")
-        self.daemon_tree.heading("Status", text="Status")
-        self.daemon_tree.heading("Bitrate", text="Bitrate")
-        self.daemon_tree.heading("Uptime", text="Uptime")
-        self.daemon_tree.column("Game", width=180)
-        self.daemon_tree.column("Status", width=80)
-        self.daemon_tree.column("Bitrate", width=80)
-        self.daemon_tree.column("Uptime", width=100)
-        self.daemon_tree.pack(padx=20, pady=10, fill="x")
-
-    def _daemon_start(self):
-        messagebox.showinfo("Daemon", "Would run: steamcast daemon start (not wired yet)")
-
-    def _daemon_stop(self):
-        messagebox.showinfo("Daemon", "Would run: steamcast daemon stop (not wired yet)")
-
-    def _daemon_attach(self):
-        messagebox.showinfo("Daemon", "Would open: live dashboard window")
 
     # ────────────────────────────────────────────────────────
     # Run
