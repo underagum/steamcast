@@ -2491,9 +2491,18 @@ def show_main_menu():
         console.print()
 
         if RICH:
-            choice = Prompt.ask("[cyan]Select option[/]", default="").strip().lower()
+            try:
+                choice = Prompt.ask("[cyan]Select option[/]", default="").strip().lower()
+            except KeyboardInterrupt:
+                console.print()
+                console.print("[dim]Goodbye.[/]")
+                sys.exit(0)
         else:
-            choice = input("Select option: ").strip().lower()
+            try:
+                choice = input("Select option: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\nGoodbye.")
+                sys.exit(0)
 
         valid = {"1", "2", "3", "4", "q"}
         if choice in valid:
