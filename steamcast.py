@@ -2621,11 +2621,21 @@ def show_daemon_menu():
             console.print("       [dim]Gracefully stops all streams[/]")
             console.print("  [white][3][/] Restart daemon")
             console.print("       [dim]Stop then start[/]")
+            console.print()
+            console.print("  [white][4][/] Install as system service")
+            console.print("       [dim]Survives reboot — starts automatically on boot[/]")
+            console.print("  [white][5][/] Uninstall system service")
+            console.print("       [dim]Remove auto-start, keep daemon config[/]")
         else:
             console.print("  [dim]⚪ Daemon is not running[/]")
             console.print()
             console.print("  [white][1][/] Start daemon")
             console.print("       [dim]Headless background stream manager[/]")
+            console.print()
+            console.print("  [white][4][/] Install as system service")
+            console.print("       [dim]Survives reboot — starts automatically on boot[/]")
+            console.print("  [white][5][/] Uninstall system service")
+            console.print("       [dim]Remove auto-start, keep daemon config[/]")
 
         console.print("  [red][Q][/] Back to main menu")
         console.print()
@@ -2639,9 +2649,9 @@ def show_daemon_menu():
             continue
 
         if running:
-            valid = {"1", "2", "3", "q"}
+            valid = {"1", "2", "3", "4", "5", "q"}
         else:
-            valid = {"1", "q"}
+            valid = {"1", "4", "5", "q"}
         if choice not in valid:
             if not choice:
                 continue
@@ -2688,6 +2698,12 @@ def show_daemon_menu():
 
         elif choice == "q":
             break
+
+        elif choice == "4":
+            _install_systemd_service()
+
+        elif choice == "5":
+            _uninstall_systemd_service()
 
 
 def _setup_windows_console():
@@ -2806,9 +2822,120 @@ def _cmd_daemon():
             print("   Use: steamcast daemon start")
     elif sub == "attach":
         _cmd_attach()
+    elif sub == "install":
+        _install_systemd_service()
+    elif sub == "uninstall":
+        _uninstall_systemd_service()
     else:
         print(f"Unknown daemon subcommand: {sub}")
-        print("Usage: steamcast daemon {start|stop|status|attach}")
+        print("Usage: steamcast daemon {start|stop|status|attach|install|uninstall}")
+
+
+def _install_systemd_service():
+    """Install SteamCast as a systemd system service (survives reboot)."""
+    import os
+    import shutil
+    import subprocess
+
+    # Detect paths
+    launcher = shutil.which("steamcast")
+    if not launcher:
+        launcher = os.path.expanduser("~/.local/bin/steamcast")
+    if not os.path.exists(launcher):
+        print("❌ steamcast not found — install the tool first.")
+        print("   curl -fsSL https://raw.githubusercontent.com/underagum/steamcast/main/install.sh | bash")
+        return
+
+    user = os.environ.get("USER") or os.environ.get("LOGNAME", "root")
+    home = os.path.expanduser("~")
+
+    unit = f"""[Unit]
+Description=SteamCast Broadcast Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User={user}
+ExecStart={launcher} daemon start
+ExecStop={launcher} daemon stop
+PIDFile={home}/.steamcast/daemon.pid
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+    print("📄 Generating systemd service...")
+    print(f"   User:      {user}")
+    print(f"   Launcher:  {launcher}")
+    print(f"   PID file:  {home}/.steamcast/daemon.pid")
+    print()
+
+    try:
+        # 1. Write unit file
+        print("🔐 sudo required for system-level install.")
+        subprocess.run(
+            ["sudo", "tee", "/etc/systemd/system/steamcast.service"],
+            input=unit, text=True, check=True, capture_output=True,
+        )
+
+        # 2. Reload systemd
+        print("📋 Reloading systemd configuration...")
+        subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+
+        # 3. Enable at boot
+        print("⚡ Enabling auto-start on boot...")
+        subprocess.run(["sudo", "systemctl", "enable", "steamcast"], check=True)
+
+        # 4. Start now
+        print("🚀 Starting daemon...")
+        subprocess.run(["sudo", "systemctl", "start", "steamcast"], check=True)
+
+        print()
+        print("✅ SteamCast daemon installed!")
+        print()
+        print("   Check status:   systemctl status steamcast")
+        print("   View logs:      journalctl -u steamcast -f")
+        print("   Stop:           steamcast daemon stop")
+        print("   Uninstall:      steamcast daemon uninstall")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Installation failed: {e}")
+        if e.output:
+            print(f"   {e.output}")
+
+
+def _uninstall_systemd_service():
+    """Remove SteamCast systemd service (stop, disable, delete)."""
+    import os
+    import subprocess
+
+    unit_path = "/etc/systemd/system/steamcast.service"
+    if not os.path.exists(unit_path):
+        print("❌ No systemd service installed.")
+        return
+
+    try:
+        # 1. Stop
+        print("🛑 Stopping daemon...")
+        subprocess.run(["sudo", "systemctl", "stop", "steamcast"], check=False)
+
+        # 2. Disable
+        print("⚡ Disabling auto-start...")
+        subprocess.run(["sudo", "systemctl", "disable", "steamcast"], check=False)
+
+        # 3. Remove unit
+        print("🗑 Removing unit file...")
+        subprocess.run(["sudo", "rm", unit_path], check=True)
+
+        # 4. Reload
+        subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+
+        print()
+        print("✅ SteamCast daemon uninstalled.")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Uninstall failed: {e}")
 
 
 def _cmd_attach():
