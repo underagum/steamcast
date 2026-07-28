@@ -457,8 +457,13 @@ class SteamCastGUI:
                 self._prep_running = False
                 return
 
-            # Detect encoder
-            enc = detect_encoder(None)  # None = no rich console
+            # Detect encoder — use a basic logger since we have no Rich console
+            class _FakeConsole:
+                def __init__(self, queue):
+                    self._q = queue
+                def print(self, text=""):
+                    self._q.append(text + "\n")
+            enc = detect_encoder(_FakeConsole(self._prep_queue))
             if enc is None:
                 self._prep_queue.append("❌ No usable encoder found.\n")
                 self._prep_running = False
