@@ -1,16 +1,23 @@
 """
-SteamCast GUI — Prototype (Windows)
-Requires: tkinter (built-in), steamcast core modules
-Status: POC / rough sketch — not functional yet
+SteamCast GUI — Windows
+Requires: tkinter (built-in), rich, psutil
+Status: Phase 1 — Setup tab wired, PREP tab placeholder
 
-Design notes:
+Design:
   - GUI wraps existing steamcast.py logic as library calls
   - No rewrite — all steamcast internals stay untouched
-  - Current TUI remains available via steamcast.py --cli
+  - TUI remains available via steamcast.py --cli
 """
 
+import json
+import os
+import sys
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+
+# Add project root to path for steamcast imports
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
 class SteamCastGUI:
@@ -21,6 +28,9 @@ class SteamCastGUI:
         self.root.title("SteamCast")
         self.root.geometry("720x520")
         self.root.resizable(True, True)
+
+        # ── Load config ──
+        self.config = self._load_config()
 
         # ── Style ──
         self.root.configure(bg="#1a1a2e")
@@ -63,6 +73,31 @@ class SteamCastGUI:
         self.status.pack(side="bottom", fill="x", padx=5, pady=3)
 
     # ────────────────────────────────────────────────────────
+    # Config I/O
+    # ────────────────────────────────────────────────────────
+
+    def _load_config(self) -> dict:
+        """Load config.json using steamcast's own loader."""
+        try:
+            from steamcast import load_config as _load
+            return _load()
+        except ImportError:
+            cfg_path = Path(__file__).resolve().parent / "config.json"
+            if cfg_path.exists():
+                return json.loads(cfg_path.read_text())
+            return {"version": "1.0.0", "games": {}}
+
+    def _save_config(self) -> bool:
+        """Save config.json using steamcast's own saver."""
+        try:
+            from steamcast import save_config as _save
+            return _save(self.config)
+        except ImportError:
+            cfg_path = Path(__file__).resolve().parent / "config.json"
+            cfg_path.write_text(json.dumps(self.config, indent=2))
+            return True
+
+    # ────────────────────────────────────────────────────────
     # Tab 1: Setup (RTMP Keys)
     # ────────────────────────────────────────────────────────
 
@@ -73,7 +108,7 @@ class SteamCastGUI:
         # Instructions
         ttk.Label(
             tab,
-            text="Paste your RTMP keys from Steamworks → Store Page → Broadcast Settings",
+            text="RTMP keys from Steamworks → Store Page → Broadcast Settings",
             font=("Segoe UI", 9),
             foreground="#aaaaaa",
         ).pack(pady=(15, 10), padx=20, anchor="w")
@@ -85,44 +120,123 @@ class SteamCastGUI:
         self.tree.heading("Key", text="RTMP Key")
         self.tree.heading("Active", text="Active")
         self.tree.column("Game", width=180)
-        self.tree.column("Key", width=300)
+        self.tree.column("Key", width=280)
         self.tree.column("Active", width=60)
         self.tree.pack(padx=20, pady=5, fill="x")
+
+        # Populate from config
+        self._refresh_tree()
+
+        # Double-click to toggle active
+        self.tree.bind("<Double-1>", self._toggle_active)
 
         # Buttons
         btn_frame = ttk.Frame(tab)
         btn_frame.pack(padx=20, pady=10, fill="x")
 
-        ttk.Button(btn_frame, text="Add Game", command=self._add_game).pack(side="left", padx=(0, 10))
-        ttk.Button(btn_frame, text="Paste Key", command=self._paste_key).pack(side="left", padx=(0, 10))
+        ttk.Button(btn_frame, text="Add Game", command=self._add_game).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_frame, text="Paste Key", command=self._paste_key).pack(side="left", padx=(0, 8))
         ttk.Button(btn_frame, text="Remove", command=self._remove_game).pack(side="left")
 
+    def _refresh_tree(self):
+        """Reload treeview from self.config."""
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        games = self.config.get("games", {})
+        for gname, gdata in games.items():
+            active = "✓" if gdata.get("active", False) else "✗"
+            rtmp = gdata.get("rtmp_key", "")
+            masked = rtmp[:12] + "…" if len(rtmp) > 12 else rtmp
+            self.tree.insert("", "end", values=(gname, masked, active))
+
     def _add_game(self):
-        """Sandbox: open a dialog to add a game name."""
-        messagebox.showinfo("Add Game", "Dialog: Enter game name + paste RTMP key (not wired yet)")
+        """Open dialog to add a new game with RTMP key."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add Game")
+        dialog.geometry("400x150")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        tk.Label(dialog, text="Game name:", font=("Segoe UI", 9)).pack(pady=(15, 0))
+        name_entry = tk.Entry(dialog, width=45)
+        name_entry.pack(pady=(2, 5))
+        name_entry.focus_set()
+
+        tk.Label(dialog, text="RTMP key:", font=("Segoe UI", 9)).pack()
+        key_entry = tk.Entry(dialog, width=45, show="•")
+        key_entry.pack(pady=(2, 10))
+
+        def _save():
+            gname = name_entry.get().strip()
+            rtmp = key_entry.get().strip()
+            if not gname:
+                return
+            self.config.setdefault("games", {})[gname] = {
+                "rtmp_key": rtmp,
+                "active": False,
+            }
+            self._save_config()
+            self._refresh_tree()
+            self._set_status(f"Added: {gname}")
+            dialog.destroy()
+
+        ttk.Button(dialog, text="Add", command=_save).pack()
+        dialog.bind("<Return>", lambda e: _save())
 
     def _paste_key(self):
-        """Sandbox: paste from clipboard into selected row."""
-        messagebox.showinfo("Paste Key", "Would auto-paste RTMP key from clipboard into selected row")
+        """Paste RTMP key from clipboard into selected row."""
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Select a game row first.")
+            return
+        try:
+            clipboard = self.root.clipboard_get()
+        except tk.TclError:
+            messagebox.showwarning("Clipboard Empty", "Copy an RTMP key first.")
+            return
+
+        gname = self.tree.item(selected[0], "values")[0]
+        self.config["games"][gname]["rtmp_key"] = clipboard
+        self._save_config()
+        self._refresh_tree()
+        self._set_status(f"Key pasted for: {gname}")
 
     def _remove_game(self):
-        """Sandbox: remove selected game."""
+        """Remove selected game from config and tree."""
         selected = self.tree.selection()
-        if selected:
-            self.tree.delete(selected[0])
+        if not selected:
+            messagebox.showwarning("No Selection", "Select a game row first.")
+            return
+        gname = self.tree.item(selected[0], "values")[0]
+        if messagebox.askyesno("Confirm", f'Remove "{gname}"?'):
+            self.config["games"].pop(gname, None)
+            self._save_config()
+            self._refresh_tree()
+            self._set_status(f"Removed: {gname}")
+
+    def _toggle_active(self, event):
+        """Double-click a row to toggle active/inactive."""
+        selected = self.tree.selection()
+        if not selected:
+            return
+        gname = self.tree.item(selected[0], "values")[0]
+        current = self.config["games"].get(gname, {}).get("active", False)
+        self.config["games"][gname]["active"] = not current
+        self._save_config()
+        self._refresh_tree()
 
     # ────────────────────────────────────────────────────────
-    # Tab 2: Prep Videos
+    # Tab 2: Prep Videos (placeholder)
     # ────────────────────────────────────────────────────────
 
     def _build_prep_tab(self):
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="PREP")
 
-        # File picker
         ttk.Label(
             tab,
-            text="Select input videos (drag-and-drop friendly on Windows):",
+            text="Convert videos to Steam broadcast spec (H.264, AAC, 1080p30)",
             font=("Segoe UI", 9),
             foreground="#aaaaaa",
         ).pack(pady=(15, 5), padx=20, anchor="w")
@@ -143,13 +257,12 @@ class SteamCastGUI:
             side="right", padx=(10, 0)
         )
 
-        # Bitrate selector
         bitrate_frame = ttk.Frame(tab)
         bitrate_frame.pack(padx=20, pady=10, fill="x")
 
         ttk.Label(bitrate_frame, text="Bitrate:", font=("Segoe UI", 9)).pack(side="left")
         self.bitrate_var = tk.StringVar(value="5000k")
-        bitrate_menu = ttk.OptionMenu(
+        ttk.OptionMenu(
             bitrate_frame,
             self.bitrate_var,
             "5000k",
@@ -158,10 +271,8 @@ class SteamCastGUI:
             "5000k",
             "6000k",
             "7000k",
-        )
-        bitrate_menu.pack(side="left", padx=(10, 0))
+        ).pack(side="left", padx=(10, 0))
 
-        # Progress + go button
         ttk.Button(tab, text="CONVERT", command=self._run_prep).pack(pady=(5, 5))
 
         self.prep_progress = ttk.Progressbar(
@@ -180,19 +291,27 @@ class SteamCastGUI:
         self.prep_log.pack(padx=20, pady=5, fill="x")
 
     def _browse_files(self):
-        """Sandbox: open file picker to select video files."""
+        """Open file picker for video files."""
         files = filedialog.askopenfilenames(
             title="Select video files",
             filetypes=[("Video files", "*.mp4 *.mkv *.avi *.mov *.webm"), ("All files", "*.*")],
         )
         for f in files:
             self.file_list.insert("end", f)
+        if files:
+            self._set_status(f"{len(files)} file(s) selected")
 
     def _run_prep(self):
-        """Sandbox: trigger PREP pipeline."""
-        self.prep_log.insert("end", "🔍 Scanning input files...\n")
+        """Placeholder — PREP not wired yet."""
+        self.prep_log.insert("end", "🔍 PREP not wired yet — coming in Phase 2\n")
         self.prep_progress["value"] = 0
-        messagebox.showinfo("PREP", "Would run: ffmpeg convert + concat (not wired yet)")
+
+    # ────────────────────────────────────────────────────────
+    # Helpers
+    # ────────────────────────────────────────────────────────
+
+    def _set_status(self, msg: str):
+        self.status.config(text=msg)
 
     # ────────────────────────────────────────────────────────
     # Run
