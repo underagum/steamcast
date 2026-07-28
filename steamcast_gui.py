@@ -298,7 +298,7 @@ class SteamCastGUI:
         ).pack(side="left", padx=(10, 0))
 
         # Progress + convert button
-        ttk.Button(tab, text="⚡ CONVERT ALL", command=self._run_prep).pack(pady=(5, 5))
+        ttk.Button(tab, text="[ CONVERT ALL ]", command=self._run_prep).pack(pady=(5, 5))
 
         self.prep_progress = ttk.Progressbar(
             tab, orient="horizontal", length=300, mode="determinate"
@@ -394,7 +394,7 @@ class SteamCastGUI:
         for child in self.root.winfo_children():
             if isinstance(child, ttk.Frame):
                 for w in child.winfo_children():
-                    if isinstance(w, ttk.Button) and "CONVERT" in (w.cget("text") or ""):
+                    if isinstance(w, ttk.Button) and "CONVERT" in str(w.cget("text")):
                         w.config(state="disabled")
 
         self.prep_log.delete("1.0", "end")
@@ -424,7 +424,7 @@ class SteamCastGUI:
             for child in self.root.winfo_children():
                 if isinstance(child, ttk.Frame):
                     for w in child.winfo_children():
-                        if isinstance(w, ttk.Button) and "CONVERT" in (w.cget("text") or ""):
+                        if isinstance(w, ttk.Button) and "CONVERT" in str(w.cget("text")):
                             w.config(state="normal")
             self._scan_input()
 
