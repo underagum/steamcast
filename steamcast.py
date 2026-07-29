@@ -2632,6 +2632,11 @@ def show_daemon_menu():
 
         console.print()
         if service_installed:
+            console.print("  [dim]🔧 System service: installed (survives reboot)[/]")
+        else:
+            console.print("  [dim]🔧 System service: not installed (daemon won't survive reboot)[/]")
+        console.print()
+        if service_installed:
             console.print("  [white][4][/] Uninstall system service")
             console.print("       [dim]Remove auto-start, keep daemon config[/]")
         else:
