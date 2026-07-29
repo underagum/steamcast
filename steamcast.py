@@ -2592,6 +2592,9 @@ def show_daemon_menu():
         st = cmd_status()
         running = st.get("running", False)
 
+        # Check if systemd service is installed
+        service_installed = os.path.exists("/etc/systemd/system/steamcast.service")
+
         if running:
             pid = st.get("pid", "?")
             uptime = st.get("uptime", "?")
@@ -2621,21 +2624,19 @@ def show_daemon_menu():
             console.print("       [dim]Gracefully stops all streams[/]")
             console.print("  [white][3][/] Restart daemon")
             console.print("       [dim]Stop then start[/]")
-            console.print()
-            console.print("  [white][4][/] Install as system service")
-            console.print("       [dim]Survives reboot — starts automatically on boot[/]")
-            console.print("  [white][5][/] Uninstall system service")
-            console.print("       [dim]Remove auto-start, keep daemon config[/]")
         else:
             console.print("  [dim]⚪ Daemon is not running[/]")
             console.print()
             console.print("  [white][1][/] Start daemon")
             console.print("       [dim]Headless background stream manager[/]")
-            console.print()
+
+        console.print()
+        if service_installed:
+            console.print("  [white][4][/] Uninstall system service")
+            console.print("       [dim]Remove auto-start, keep daemon config[/]")
+        else:
             console.print("  [white][4][/] Install as system service")
             console.print("       [dim]Survives reboot — starts automatically on boot[/]")
-            console.print("  [white][5][/] Uninstall system service")
-            console.print("       [dim]Remove auto-start, keep daemon config[/]")
 
         console.print("  [red][Q][/] Back to main menu")
         console.print()
@@ -2649,9 +2650,9 @@ def show_daemon_menu():
             continue
 
         if running:
-            valid = {"1", "2", "3", "4", "5", "q"}
+            valid = {"1", "2", "3", "4", "q"}
         else:
-            valid = {"1", "4", "5", "q"}
+            valid = {"1", "4", "q"}
         if choice not in valid:
             if not choice:
                 continue
@@ -2696,14 +2697,14 @@ def show_daemon_menu():
             else:
                 console.print("[green]✅ Daemon restarted.[/]")
 
+        elif choice == "4":
+            if service_installed:
+                _uninstall_systemd_service()
+            else:
+                _install_systemd_service()
+
         elif choice == "q":
             break
-
-        elif choice == "4":
-            _install_systemd_service()
-
-        elif choice == "5":
-            _uninstall_systemd_service()
 
 
 def _setup_windows_console():
