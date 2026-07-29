@@ -2919,7 +2919,7 @@ WantedBy=multi-user.target
         subprocess.run(["sudo", "systemctl", "start", "steamcast"], check=True)
 
         print()
-        print("✅ SteamCast daemon installed!")
+        print("✅ SteamCast system service installed!")
         print()
         print("   Check status:   systemctl status steamcast")
         print("   View logs:      journalctl -u steamcast -f")
