@@ -318,10 +318,10 @@ class DaemonManager:
                 print(f"✅ Daemon stopped (PID {pid})")
                 # Verify port is actually free before confirming
                 print(f"     Waiting for port {DEFAULT_PORT} to release...", end="", flush=True)
-                if self._wait_port_free(timeout=3):
+                if self._wait_port_free(timeout=10):
                     print(f"\n     ✓ Port {DEFAULT_PORT} free")
                 else:
-                    print(f"\n     ⚠ Port {DEFAULT_PORT} still in use after 3s. "
+                    print(f"\n     ⚠ Port {DEFAULT_PORT} still in use after 10s. "
                           f"Wait before restarting.")
                 return
             time.sleep(0.5)
@@ -332,10 +332,10 @@ class DaemonManager:
             remove_pid()
             print(f"⚠️ Daemon killed forcefully (PID {pid})")
             print(f"     Waiting for port {DEFAULT_PORT} to release...", end="", flush=True)
-            if self._wait_port_free(timeout=3):
+            if self._wait_port_free(timeout=10):
                 print(f"\n     ✓ Port {DEFAULT_PORT} free")
             else:
-                print(f"\n     ⚠ Port {DEFAULT_PORT} still in use after 3s. "
+                print(f"\n     ⚠ Port {DEFAULT_PORT} still in use after 10s. "
                       f"Wait before restarting.")
         except OSError:
             raise DaemonError("Could not kill daemon process.")
