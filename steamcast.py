@@ -2686,7 +2686,6 @@ def show_daemon_menu():
             console.print("\nStopping daemon...")
             try:
                 cmd_stop()
-                console.print("[green]✅ Daemon stopped.[/]")
             except DaemonError as e:
                 console.print(f"[red]✗ {e}[/]")
 
@@ -2959,7 +2958,7 @@ def _uninstall_systemd_service():
         subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
 
         print()
-        print("✅ SteamCast daemon uninstalled.")
+        print("✅ SteamCast system service uninstalled.")
     except subprocess.CalledProcessError as e:
         print(f"❌ Uninstall failed: {e}")
 
