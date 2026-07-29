@@ -2830,6 +2830,16 @@ def _cmd_daemon():
     elif sub == "attach":
         _cmd_attach()
     elif sub == "install":
+        # Stop existing daemon first (avoid port/PID conflict)
+        st = cmd_status()
+        if st.get("running"):
+            print("🛑 Stopping existing daemon...")
+            try:
+                cmd_stop()
+                print("   Daemon stopped.")
+            except DaemonError:
+                print("   ⚠ Could not stop gracefully — continuing anyway.")
+            print()
         _install_systemd_service()
     elif sub == "uninstall":
         _uninstall_systemd_service()
