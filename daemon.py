@@ -327,6 +327,9 @@ class DaemonManager:
         try:
             os.kill(pid, signal.SIGKILL)
             remove_pid()
+            if not self._wait_port_free(timeout=3):
+                print(f"⚠️ Port {DEFAULT_PORT} still in use after force kill. "
+                      f"Wait a moment before restarting.")
             print(f"⚠️ Daemon killed forcefully (PID {pid})")
         except OSError:
             raise DaemonError("Could not kill daemon process.")
@@ -380,7 +383,7 @@ class DaemonManager:
                 if proc and proc.poll() is None:
                     logger.info("Killing stream: %s", gname)
                     proc.kill()
-        remove_pid()
+        remove_pid(os.getpid())  # only delete OUR pid, not another daemon's
         logger.info("Daemon stopped.")
         sys.exit(0)
 
