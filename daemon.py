@@ -30,6 +30,7 @@ import logging
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -158,7 +159,6 @@ class DaemonManager:
             )
 
         # Check port availability BEFORE forking (fast feedback)
-        import socket
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             s.bind(("127.0.0.1", DEFAULT_PORT))
@@ -367,7 +367,6 @@ class DaemonManager:
     @staticmethod
     def _wait_port_free(timeout: float = 5) -> bool:
         """Wait for port 6789 to be released. Returns True if free, False if timed out."""
-        import socket
         deadline = time.time() + timeout
         while time.time() < deadline:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -664,6 +663,7 @@ class SteamCastDaemonServer:
 
         self._handler_class = _Handler
         self._server = HTTPServer(addr, _Handler)
+        self._server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     def serve_forever(self):
         self._server.serve_forever()
