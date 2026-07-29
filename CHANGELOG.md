@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.6.0 — 2026-07-30
+
+### Added
+
+- **Systemd service install.** `steamcast daemon install` generates + enables a systemd service. Daemon survives reboots automatically (`Restart=on-failure` with 10s cooldown).
+- **Dynamic install/uninstall in TUI.** Daemon Manager detects whether the systemd service is already installed and shows context-aware option 4 (Install ↔ Uninstall).
+- **System service status display.** Daemon Manager always shows whether the systemd service is installed and whether it will survive a reboot.
+- **Windows console mode.** `.exe` builds automatically configure the console for Windows-native behavior: Ctrl+C copies selected text instead of killing the app, mouse select + right-click copies, Ctrl+V pastes. Linux hotkeys are untouched.
+
+### Changed
+
+- **systemd uses `Type=simple` + `--foreground`.** The daemon no longer double-forks when running under systemd — systemd is the process supervisor directly. Eliminates the PID file race condition that caused `systemctl start` to fail with "Can't open PID file."
+- **Stop flow redesigned.** Two-phase output: `✅ Daemon stopped (PID N)` then `Waiting for port 6789 to release...` with per-second retry dots. Timeout extended to 60s for edge cases.
+
+### Fixed
+
+- **PID file race.** Failed daemon starts no longer delete another running daemon's PID file (`remove_pid` now guards on `expected_pid`). The signal handler (`_handle_signal`) also passes its own PID.
+- **Port conflict detection.** `DaemonManager.start()` now checks port availability *before* forking (fast feedback). Three separate socket creation points all set `SO_REUSEADDR` to prevent rapid start/stop cycles from blocking the port.
+- **`sys.exit(1)` in `cmd_start`/`cmd_stop` killed the TUI.** Error handling moved to `_cmd_daemon()` for the CLI path and `show_daemon_menu()` for the TUI path — DaemonError now shows inline, TUI stays alive.
+- **Wording clarity.** `"daemon installed"` → `"system service installed"`. `"daemon uninstalled"` → `"system service uninstalled"`. Removed duplicate "✅ Daemon stopped" message.
+
 ## v1.5.1 — 2026-07-16
 
 ### Fixed

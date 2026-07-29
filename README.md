@@ -148,14 +148,31 @@ steamcast daemon start
 # One-shot status check
 steamcast daemon status
 # 🔵 Daemon is running (PID 3124, uptime 2:14:33)
-#   dreadout  🟢 LIVE  5000k
 
 # Live read-only dashboard — Ctrl+C to detach, daemon keeps running
 steamcast daemon attach
 
-# Graceful stop
+# Graceful stop — verifies port is released before confirming
 steamcast daemon stop
 ```
+
+### Survive reboots (v1.6.0+)
+
+Install the daemon as a systemd service so it starts automatically every boot:
+
+```bash
+steamcast daemon install
+# 📄 Generating systemd service...
+# 🔐 sudo required for system-level install.
+# ✅ SteamCast system service installed!
+#
+#    Check status:   systemctl status steamcast
+#    View logs:      journalctl -u steamcast -f
+
+steamcast daemon uninstall   # remove the service, keep daemon config
+```
+
+In the TUI, Daemon Manager shows whether the system service is installed and offers a single context-aware option to install or uninstall it.
 
 **How it works:**
 - Reads the same `config.json` your TUI uses — toggle games active in SETUP, the daemon picks them up
@@ -173,7 +190,7 @@ steamcast daemon stop
 }
 ```
 
-> 💡 **Tip:** The daemon detaches completely from your terminal. Start it from any SSH session — it keeps running after you disconnect. Run `steamcast daemon attach` to check in anytime.
+> 💡 **Tip:** The daemon detaches completely from your terminal. Start it from any SSH session — it keeps running after you disconnect. Run `steamcast daemon attach` to check in anytime. For 24/7 uptime, install the systemd service once and forget about it.
 
 ---
 
