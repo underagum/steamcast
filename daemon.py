@@ -138,8 +138,12 @@ class DaemonManager:
 
     # ── Public API ──
 
-    def start(self):
-        """Daemonize and run the headless stream engine."""
+    def start(self, foreground: bool = False):
+        """Daemonize and run the headless stream engine.
+
+        When foreground=True (systemd mode): skip double-fork,
+        run directly so systemd can supervise the process.
+        """
         existing_pid = read_pid()
         if existing_pid and is_process_alive(existing_pid):
             raise DaemonError(
@@ -148,6 +152,55 @@ class DaemonManager:
             )
 
         _ensure_dir()
+
+        if foreground:
+            # ── Foreground mode (systemd) ──
+            # No forking — systemd is the process supervisor.
+            # Write PID so 'steamcast daemon stop' still works.
+            write_pid(os.getpid())
+
+            # Setup logging (prefix so journald picks it up)
+            setup_logging()
+
+            # Set start time early
+            self._start_time = time.time()
+
+            # Signal handlers
+            signal.signal(signal.SIGTERM, self._handle_signal)
+            signal.signal(signal.SIGINT, self._handle_signal)
+
+            logger.info("=== SteamCast Daemon started (PID %d) ===", os.getpid())
+
+            # Load config
+            games = self.config.get("games", [])
+            restart_every = self.config.get("restart_every_hours", 4)
+            duration = self.config.get("duration_hours", 0)
+
+            if not games:
+                logger.warning("No games configured — daemon starting idle.")
+
+            # Start HTTP server thread
+            try:
+                server = SteamCastDaemonServer(("127.0.0.1", DEFAULT_PORT), self)
+            except OSError as e:
+                logger.error("Cannot bind port %d: %s. Is another daemon running?", DEFAULT_PORT, e)
+                remove_pid()
+                raise DaemonError(f"Port {DEFAULT_PORT} already in use.") from e
+            server_thread = Thread(target=server.serve_forever, daemon=True)
+            server_thread.start()
+            logger.info("HTTP status server listening on 127.0.0.1:%d", DEFAULT_PORT)
+
+            if not games:
+                self._idle_loop()
+                return
+
+            logger.info(
+                "Starting %d streams, auto-restart every %dh%s",
+                len(games), restart_every,
+                f", stop after {duration}h" if duration else "",
+            )
+            self._run_engine(games, restart_every, duration)
+            return
 
         # ── First fork ──
         pid = os.fork()
@@ -570,11 +623,14 @@ class SteamCastDaemonServer:
 # ── CLI Entry Points ──
 
 
-def cmd_start(config: dict | None = None):
-    """Start the daemon (called from steamcast.py)."""
+def cmd_start(config: dict | None = None, foreground: bool = False):
+    """Start the daemon (called from steamcast.py).
+
+    foreground=True: skip double-fork, run under systemd supervision.
+    """
     mgr = DaemonManager(config)
     try:
-        mgr.start()
+        mgr.start(foreground=foreground)
     except DaemonError as e:
         print(f"❌ {e}")
         sys.exit(1)

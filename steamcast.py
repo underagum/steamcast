@@ -2795,8 +2795,9 @@ def _cmd_daemon():
 
     if sub == "start":
         config = load_config()
+        foreground = "--foreground" in sys.argv or "-f" in sys.argv
         print("Starting SteamCast daemon...")
-        cmd_start(config)
+        cmd_start(config, foreground=foreground)
     elif sub == "stop":
         cmd_stop()
     elif sub == "status":
@@ -2857,11 +2858,10 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=forking
+Type=simple
 User={user}
-ExecStart={launcher} daemon start
+ExecStart={launcher} daemon start --foreground
 ExecStop={launcher} daemon stop
-PIDFile={home}/.steamcast/daemon.pid
 Restart=on-failure
 RestartSec=10
 
