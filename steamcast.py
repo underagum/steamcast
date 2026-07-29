@@ -2802,9 +2802,17 @@ def _cmd_daemon():
         config = load_config()
         foreground = "--foreground" in sys.argv or "-f" in sys.argv
         print("Starting SteamCast daemon...")
-        cmd_start(config, foreground=foreground)
+        try:
+            cmd_start(config, foreground=foreground)
+        except DaemonError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
     elif sub == "stop":
-        cmd_stop()
+        try:
+            cmd_stop()
+        except DaemonError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
     elif sub == "status":
         st = cmd_status()
         if st.get("running"):

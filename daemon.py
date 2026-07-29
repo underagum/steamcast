@@ -678,24 +678,13 @@ def cmd_start(config: dict | None = None, foreground: bool = False):
     foreground=True: skip double-fork, run under systemd supervision.
     """
     mgr = DaemonManager(config)
-    try:
-        mgr.start(foreground=foreground)
-    except DaemonError as e:
-        print(f"❌ {e}")
-        sys.exit(1)
-    except KeyboardInterrupt:
-        print("\nShutdown requested.")
-        mgr.stop()
+    mgr.start(foreground=foreground)  # let DaemonError propagate to caller
 
 
 def cmd_stop():
     """Stop the daemon."""
     mgr = DaemonManager()
-    try:
-        mgr.stop()
-    except DaemonError as e:
-        print(f"❌ {e}")
-        sys.exit(1)
+    mgr.stop()  # let DaemonError propagate to caller
 
 
 def cmd_status() -> dict:
