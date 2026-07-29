@@ -160,6 +160,7 @@ class DaemonManager:
 
         # Check port availability BEFORE forking (fast feedback)
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", DEFAULT_PORT))
         except OSError:
@@ -370,6 +371,7 @@ class DaemonManager:
         deadline = time.time() + timeout
         while time.time() < deadline:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 s.bind(("127.0.0.1", DEFAULT_PORT))
                 s.close()
