@@ -105,9 +105,15 @@ def read_pid() -> Optional[int]:
     return None
 
 
-def remove_pid():
-    if PID_FILE.exists():
-        PID_FILE.unlink()
+def remove_pid(expected_pid: int | None = None):
+    """Delete the PID file — optionally only if it matches expected_pid."""
+    if not PID_FILE.exists():
+        return
+    if expected_pid is not None:
+        current = read_pid()
+        if current != expected_pid:
+            return  # another process wrote its PID — don't delete
+    PID_FILE.unlink()
 
 
 def is_process_alive(pid: int) -> bool:
@@ -151,6 +157,19 @@ class DaemonManager:
                 f"Use 'steamcast daemon stop' first."
             )
 
+        # Check port availability BEFORE forking (fast feedback)
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(("127.0.0.1", DEFAULT_PORT))
+        except OSError:
+            s.close()
+            raise DaemonError(
+                f"Port {DEFAULT_PORT} already in use. "
+                f"Another daemon may be running. Check 'steamcast daemon status'."
+            )
+        s.close()
+
         _ensure_dir()
 
         if foreground:
@@ -184,7 +203,7 @@ class DaemonManager:
                 server = SteamCastDaemonServer(("127.0.0.1", DEFAULT_PORT), self)
             except OSError as e:
                 logger.error("Cannot bind port %d: %s. Is another daemon running?", DEFAULT_PORT, e)
-                remove_pid()
+                remove_pid(os.getpid())  # only delete OUR pid, not another running daemon's
                 raise DaemonError(f"Port {DEFAULT_PORT} already in use.") from e
             server_thread = Thread(target=server.serve_forever, daemon=True)
             server_thread.start()
@@ -260,7 +279,7 @@ class DaemonManager:
             server = SteamCastDaemonServer(("127.0.0.1", DEFAULT_PORT), self)
         except OSError as e:
             logger.error("Cannot bind port %d: %s. Is another daemon running?", DEFAULT_PORT, e)
-            remove_pid()
+            remove_pid(os.getpid())  # only delete OUR pid, not another running daemon's
             raise DaemonError(f"Port {DEFAULT_PORT} already in use. Stop existing daemon first.") from e
         server_thread = Thread(target=server.serve_forever, daemon=True)
         server_thread.start()
