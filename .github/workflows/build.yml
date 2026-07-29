@@ -10,6 +10,9 @@ on:
       - ".gitignore"
   workflow_dispatch:  # manual trigger
 
+permissions:
+  contents: write    # required for release upload
+
 jobs:
   build:
     runs-on: windows-latest
