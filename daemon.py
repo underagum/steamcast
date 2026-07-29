@@ -315,11 +315,14 @@ class DaemonManager:
         for _ in range(20):
             if not is_process_alive(pid):
                 remove_pid()
-                # Verify port is actually free before confirming
-                if not self._wait_port_free(timeout=3):
-                    print(f"⚠️ Port {DEFAULT_PORT} still in use after stop. "
-                          f"Wait a moment before restarting.")
                 print(f"✅ Daemon stopped (PID {pid})")
+                # Verify port is actually free before confirming
+                print(f"     Waiting for port {DEFAULT_PORT} to release...", end="", flush=True)
+                if self._wait_port_free(timeout=3):
+                    print(f"\n     ✓ Port {DEFAULT_PORT} free")
+                else:
+                    print(f"\n     ⚠ Port {DEFAULT_PORT} still in use after 3s. "
+                          f"Wait before restarting.")
                 return
             time.sleep(0.5)
 
@@ -327,10 +330,13 @@ class DaemonManager:
         try:
             os.kill(pid, signal.SIGKILL)
             remove_pid()
-            if not self._wait_port_free(timeout=3):
-                print(f"⚠️ Port {DEFAULT_PORT} still in use after force kill. "
-                      f"Wait a moment before restarting.")
             print(f"⚠️ Daemon killed forcefully (PID {pid})")
+            print(f"     Waiting for port {DEFAULT_PORT} to release...", end="", flush=True)
+            if self._wait_port_free(timeout=3):
+                print(f"\n     ✓ Port {DEFAULT_PORT} free")
+            else:
+                print(f"\n     ⚠ Port {DEFAULT_PORT} still in use after 3s. "
+                      f"Wait before restarting.")
         except OSError:
             raise DaemonError("Could not kill daemon process.")
 
@@ -371,7 +377,8 @@ class DaemonManager:
                 return True
             except OSError:
                 s.close()
-                time.sleep(0.3)
+                print(".", end="", flush=True)
+                time.sleep(1.0)
         return False
 
     def _handle_signal(self, signum, frame):
