@@ -315,6 +315,8 @@ class DaemonManager:
         for _ in range(20):
             if not is_process_alive(pid):
                 remove_pid()
+                # Verify port is actually free before confirming
+                self._wait_port_free(timeout=3)
                 print(f"✅ Daemon stopped (PID {pid})")
                 return
             time.sleep(0.5)
@@ -350,6 +352,21 @@ class DaemonManager:
             return {"running": True, "pid": pid, "uptime": uptime, "streams": []}
 
     # ── Internal ──
+
+    @staticmethod
+    def _wait_port_free(timeout: float = 5):
+        """Wait for port 6789 to be released. Returns True if free, False if timed out."""
+        import socket
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                s.bind(("127.0.0.1", DEFAULT_PORT))
+                s.close()
+                return
+            except OSError:
+                s.close()
+                time.sleep(0.3)
 
     def _handle_signal(self, signum, frame):
         logger.info("Received signal %d, shutting down...", signum)
