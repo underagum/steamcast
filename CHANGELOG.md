@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.6.1 — 2026-07-30
+
+### Fixed
+
+- **TUI install doesn't stop daemon first.** Installing systemd service via daemon menu with a running daemon would fail (`systemctl start` → port conflict). TUI now auto-stops the daemon before installing, matching CLI `steamcast daemon install` behavior.
+
 ## v1.6.0 — 2026-07-30
 
 ### Added

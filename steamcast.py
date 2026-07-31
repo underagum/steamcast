@@ -41,7 +41,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
