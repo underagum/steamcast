@@ -42,6 +42,11 @@ except ImportError:
 # ─── Config ───────────────────────────────────────────────────────────
 
 VERSION = "1.6.0"
+
+
+def _parse_version(v: str) -> tuple[int, ...]:
+    """Parse '1.5.0' or 'v1.5.0' to (1, 5, 0) for comparison."""
+    return tuple(int(x) for x in v.strip().lstrip("v").split("."))
 if getattr(sys, 'frozen', False):
     ROOT_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2436,6 +2441,14 @@ def version_check():
             with urllib.request.urlopen(req, timeout=VERSION_CHECK_TIMEOUT) as resp:
                 remote = resp.read().decode().strip()
             if remote and remote != VERSION:
+                # Only show if remote is *newer* than local (not just different)
+                try:
+                    local_v = _parse_version(VERSION)
+                    remote_v = _parse_version(remote)
+                    if remote_v <= local_v:
+                        return  # already up to date or ahead of remote
+                except Exception:
+                    pass  # fall through — can't parse, show the message anyway
                 console.print()
                 console.print(f"[yellow]⚠ A newer version of SteamCast ({remote}) is available![/]")
                 console.print("[yellow]  Download: https://github.com/underagum/steamcast/releases[/]")
