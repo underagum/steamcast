@@ -2718,6 +2718,15 @@ def show_daemon_menu():
             if service_installed:
                 _uninstall_systemd_service()
             else:
+                # Stop daemon if running (avoid port conflict on systemctl start)
+                st = cmd_status()
+                if st.get("running"):
+                    console.print("\n🛑 Stopping daemon before install...")
+                    try:
+                        cmd_stop()
+                    except DaemonError:
+                        console.print("[yellow]   ⚠ Could not stop gracefully — continuing anyway.[/]")
+                console.print()
                 _install_systemd_service()
 
         elif choice == "q":
