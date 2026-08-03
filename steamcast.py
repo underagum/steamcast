@@ -2656,6 +2656,9 @@ def show_daemon_menu():
             console.print("  [white][4][/] Install as system service")
             console.print("       [dim]Survives reboot — starts automatically on boot[/]")
 
+        console.print("  [white][5][/] Schedule broadcast")
+        console.print("       [dim]Set start + end datetime via systemd timer[/]")
+
         console.print("  [red][Q][/] Back to main menu")
         console.print()
 
@@ -2668,9 +2671,9 @@ def show_daemon_menu():
             continue
 
         if running:
-            valid = {"1", "2", "3", "4", "q"}
+            valid = {"1", "2", "3", "4", "5", "q"}
         else:
-            valid = {"1", "4", "q"}
+            valid = {"1", "4", "5", "q"}
         if choice not in valid:
             if not choice:
                 continue
@@ -2728,6 +2731,9 @@ def show_daemon_menu():
                         console.print("[yellow]   ⚠ Could not stop gracefully — continuing anyway.[/]")
                 console.print()
                 _install_systemd_service()
+
+        elif choice == "5":
+            _schedule_menu()
 
         elif choice == "q":
             break
@@ -2872,9 +2878,175 @@ def _cmd_daemon():
         _install_systemd_service()
     elif sub == "uninstall":
         _uninstall_systemd_service()
+    elif sub == "schedule":
+        _cmd_schedule()
     else:
         print(f"Unknown daemon subcommand: {sub}")
-        print("Usage: steamcast daemon {start|stop|status|attach|install|uninstall}")
+        print("Usage: steamcast daemon {start|stop|status|attach|install|uninstall|schedule}")
+
+
+def _schedule_menu():
+    """TUI wrapper for daemon scheduling."""
+    from daemon import cmd_status
+
+    banner()
+    console.print("[bold yellow]=== SCHEDULE BROADCAST ===[/]\n")
+    console.print("[dim]Set a start and end datetime. The daemon will[/]")
+    console.print("[dim]start automatically via systemd timer.[/]")
+    console.print()
+
+    # Show current schedule
+    timer_path = "/etc/systemd/system/steamcast.timer"
+    if os.path.exists(timer_path):
+        console.print("[green]📅 Schedule active:[/]")
+        subprocess.run(["systemctl", "list-timers", "steamcast.timer", "--no-pager"],
+                      check=False)
+        console.print()
+        if Confirm.ask("[yellow]Clear current schedule?[/]", default=False):
+            _do_schedule(clear=True)
+            return
+    else:
+        console.print("[dim]📅 No schedule set.[/]")
+        console.print()
+
+    console.print("[dim]Enter dates as YYYYMMDD HH:MM (24h).[/]")
+    console.print()
+
+    now = datetime.now().replace(microsecond=0)
+    start_str = Prompt.ask("[cyan]Start[/]").strip()
+    try:
+        start_dt = datetime.strptime(start_str, "%Y%m%d %H:%M")
+    except ValueError:
+        console.print("[red]Invalid format. Expected YYYYMMDD HH:MM[/]")
+        return
+    if start_dt <= now:
+        console.print("[red]Start must be in the future.[/]")
+        return
+
+    end_str = Prompt.ask("[cyan]End[/]").strip()
+    try:
+        end_dt = datetime.strptime(end_str, "%Y%m%d %H:%M")
+    except ValueError:
+        console.print("[red]Invalid format. Expected YYYYMMDD HH:MM[/]")
+        return
+    if end_dt <= start_dt:
+        console.print("[red]End must be after start.[/]")
+        return
+
+    _do_schedule(start_dt=start_dt, end_dt=end_dt)
+
+
+def _do_schedule(start_dt=None, end_dt=None, clear=False):
+    """Core schedule logic — shared by CLI and TUI."""
+    timer_path = "/etc/systemd/system/steamcast.timer"
+    cfg_path = os.path.expanduser("~/.steamcast/config.json")
+    _ensure_schedule_dir()
+
+    if clear:
+        if os.path.exists(timer_path):
+            subprocess.run(["sudo", "systemctl", "stop", "steamcast.timer"], check=False)
+            subprocess.run(["sudo", "systemctl", "disable", "steamcast.timer"], check=False)
+            subprocess.run(["sudo", "rm", timer_path], check=True)
+            subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+            print("📅 Schedule cleared.")
+        else:
+            print("📅 No schedule to clear.")
+        return
+
+    duration_h = round((end_dt - start_dt).total_seconds() / 3600, 1)
+
+    # Write duration to daemon config
+    try:
+        cfg = json.loads(open(cfg_path).read()) if os.path.exists(cfg_path) else {}
+    except Exception:
+        cfg = {}
+    cfg["duration_hours"] = duration_h
+    with open(cfg_path, "w") as f:
+        json.dump(cfg, f, indent=2)
+
+    timer_unit = f"""[Unit]
+Description=SteamCast scheduled broadcast
+
+[Timer]
+OnCalendar={start_dt.strftime('%Y-%m-%d %H:%M:%S')}
+
+[Install]
+WantedBy=timers.target
+"""
+
+    print(f"📅 Scheduling broadcast:")
+    print(f"   Start:  {start_dt.strftime('%Y-%m-%d %H:%M')}")
+    print(f"   End:    {end_dt.strftime('%Y-%m-%d %H:%M')}")
+    print(f"   Duration: {duration_h}h")
+    print()
+    print("🔐 sudo required for timer install.")
+
+    try:
+        subprocess.run(
+            ["sudo", "tee", timer_path],
+            input=timer_unit, text=True, check=True,
+        )
+        subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+        subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast.timer"], check=True)
+        print()
+        print("✅ Schedule set!")
+        print(f"   Check:   systemctl list-timers steamcast.timer")
+        print(f"   Clear:   steamcast daemon schedule --clear")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Failed: {e}")
+
+
+def _cmd_schedule():
+    """CLI entry point for daemon schedule (parses sys.argv)."""
+    timer_path = "/etc/systemd/system/steamcast.timer"
+    cfg_path = os.path.expanduser("~/.steamcast/config.json")
+
+    args = sys.argv[3:] if len(sys.argv) > 3 else []
+
+    if not args:
+        if os.path.exists(timer_path):
+            print("📅 Scheduled broadcast:")
+            subprocess.run(["systemctl", "list-timers", "steamcast.timer", "--no-pager"],
+                          check=False)
+            try:
+                cfg = json.loads(open(cfg_path).read()) if os.path.exists(cfg_path) else {}
+                dur = cfg.get("duration_hours", 0)
+                if dur:
+                    print(f"   Duration: {dur}h")
+            except Exception:
+                pass
+        else:
+            print("📅 No schedule set.")
+            print("   Usage: steamcast daemon schedule \"20260815 09:00\" \"20260815 18:00\"")
+        return
+
+    if len(args) == 1 and args[0] == "--clear":
+        _do_schedule(clear=True)
+        return
+
+    if len(args) != 4:
+        print("❌ Usage: steamcast daemon schedule \"YYYYMMDD HH:MM\" \"YYYYMMDD HH:MM\"")
+        return
+
+    start_str = f"{args[0]} {args[1]}"
+    end_str = f"{args[2]} {args[3]}"
+    try:
+        start_dt = datetime.strptime(start_str, "%Y%m%d %H:%M")
+        end_dt = datetime.strptime(end_str, "%Y%m%d %H:%M")
+    except ValueError:
+        print("❌ Invalid datetime format. Expected YYYYMMDD HH:MM")
+        return
+
+    if end_dt <= start_dt:
+        print("❌ End must be after start.")
+        return
+
+    _do_schedule(start_dt=start_dt, end_dt=end_dt)
+
+
+def _ensure_schedule_dir():
+    """Create daemon config directory if missing."""
+    os.makedirs(os.path.expanduser("~/.steamcast"), exist_ok=True)
 
 
 def _install_systemd_service():
