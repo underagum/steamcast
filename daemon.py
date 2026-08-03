@@ -303,6 +303,17 @@ class DaemonManager:
         """Stop the daemon gracefully."""
         pid = read_pid()
         if not pid:
+            # Before giving up, try systemctl if service is installed
+            # (skip if called from systemd ExecStop to avoid recursion)
+            unit_path = "/etc/systemd/system/steamcast.service"
+            if os.path.exists(unit_path) and not os.environ.get("INVOCATION_ID"):
+                logger.info("No PID file — trying systemctl stop instead.")
+                try:
+                    subprocess.run(["sudo", "systemctl", "stop", "steamcast"], check=True)
+                    print("✅ System service stopped via systemctl.")
+                    return
+                except subprocess.CalledProcessError as e:
+                    pass  # fall through to error below
             raise DaemonError("No PID file found. Daemon is not running.")
 
         if not is_process_alive(pid):
@@ -310,6 +321,19 @@ class DaemonManager:
             raise DaemonError(f"PID {pid} exists but process is dead. Removed stale PID.")
 
         logger.info("Stopping daemon (PID %d)...", pid)
+
+        # If running as systemd service, use systemctl for clean stop.
+        # Skip if we're being called FROM systemd (ExecStop) — avoid recursion.
+        unit_path = "/etc/systemd/system/steamcast.service"
+        if os.path.exists(unit_path) and not os.environ.get("INVOCATION_ID"):
+            logger.info("Systemd service detected — using systemctl stop.")
+            try:
+                subprocess.run(["sudo", "systemctl", "stop", "steamcast"], check=True)
+                print("✅ System service stopped via systemctl.")
+                return
+            except subprocess.CalledProcessError:
+                logger.warning("systemctl stop failed, falling back to SIGTERM.")
+
         os.kill(pid, signal.SIGTERM)
 
         # Wait up to 10 seconds for clean shutdown
