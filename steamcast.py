@@ -2949,6 +2949,7 @@ def _do_schedule(start_dt=None, end_dt=None, clear=False):
             subprocess.run(["sudo", "rm", timer_path], check=True)
             subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
             print("📅 Schedule cleared.")
+            print("   Re-enable auto-start: sudo systemctl enable steamcast")
         else:
             print("📅 No schedule to clear.")
         return
@@ -2988,6 +2989,8 @@ WantedBy=timers.target
         )
         subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
         subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast.timer"], check=True)
+        # Disable auto-start on boot — only the timer should trigger the daemon
+        subprocess.run(["sudo", "systemctl", "disable", "steamcast.service"], check=True)
         print()
         print("✅ Schedule set!")
         print(f"   Check:   systemctl list-timers steamcast.timer")
