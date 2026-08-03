@@ -2931,17 +2931,14 @@ WantedBy=multi-user.target
         print("📋 Reloading systemd configuration...")
         subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
 
-        # 3. Enable at boot
+        # 3. Enable at boot (don't auto-start — user starts manually)
         print("⚡ Enabling auto-start on boot...")
         subprocess.run(["sudo", "systemctl", "enable", "steamcast"], check=True)
-
-        # 4. Start now
-        print("🚀 Starting daemon...")
-        subprocess.run(["sudo", "systemctl", "start", "steamcast"], check=True)
 
         print()
         print("✅ SteamCast system service installed!")
         print()
+        print("   Start now:      sudo systemctl start steamcast")
         print("   Check status:   systemctl status steamcast")
         print("   View logs:      journalctl -u steamcast -f")
         print("   Stop:           steamcast daemon stop")
