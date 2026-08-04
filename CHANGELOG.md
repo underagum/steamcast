@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.6.2 — 2026-08-03
+
+### Added
+
+- **Daemon scheduling via systemd timer.** `steamcast daemon schedule "YYYYMMDD HH:MM" "YYYYMMDD HH:MM"` generates a systemd timer with `OnCalendar`. The daemon auto-stops after `duration_hours` (calculated from start→end). Survives reboots, no polling.
+- **TUI Schedule menu.** Daemon Manager `[5] Schedule broadcast` — interactive prompts for start/end datetime, shows current schedule, offers clear option.
+
+### Changed
+
+- **Install no longer auto-starts daemon.** `steamcast daemon install` now enables the service for next boot but doesn't start it immediately. User starts manually.
+- **Schedule disables auto-start on boot.** When a timer is active, `steamcast.service` is disabled — only the timer triggers the daemon.
+
+### Fixed
+
+- **stop now routes through systemctl when service is installed.** Eliminates the systemd restart loop where `Restart=on-failure` resurrected the daemon after manual SIGTERM. Falls back to direct SIGTERM if systemctl fails or daemon is running outside systemd.
+- **stop verifies daemon actually died.** `systemctl stop` returns success on already-inactive services — now checks `is_process_alive()` and falls through to SIGTERM if the daemon persists.
+- **INVOCATION_ID guard prevents ExecStop recursion.** When called from systemd's `ExecStop`, `stop()` skips the systemctl routing and sends SIGTERM directly.
+
 ## v1.6.1 — 2026-07-30
 
 ### Fixed
