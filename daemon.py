@@ -329,8 +329,12 @@ class DaemonManager:
             logger.info("Systemd service detected — using systemctl stop.")
             try:
                 subprocess.run(["sudo", "systemctl", "stop", "steamcast"], check=True)
-                print("✅ System service stopped via systemctl.")
-                return
+                # Verify the daemon actually stopped (it may have been running outside systemd)
+                time.sleep(1)
+                if not is_process_alive(pid):
+                    print("✅ System service stopped via systemctl.")
+                    return
+                logger.warning("systemctl stop succeeded but daemon still alive — falling back to SIGTERM.")
             except subprocess.CalledProcessError:
                 logger.warning("systemctl stop failed, falling back to SIGTERM.")
 
