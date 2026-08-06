@@ -2744,11 +2744,11 @@ def _setup_windows_console():
 
     On Windows .exe builds:
       - Ctrl+C no longer kills the app → use Q to quit instead
-      - Ctrl+V pastes clipboard text (Windows 10+)
-      - Mouse select + right-click copies text (QuickEdit mode)
       - Escape key still bubbles through Rich (no SIGINT)
 
-    Linux/macOS: no-op — terminal defaults are fine.
+    We use SetConsoleCtrlHandler to intercept Ctrl+C at the signal
+    level rather than disabling ENABLE_PROCESSED_INPUT, which would
+    break line editing (Enter, Backspace) in Prompt.ask().
     """
     if sys.platform != "win32":
         return
@@ -2757,28 +2757,37 @@ def _setup_windows_console():
         import ctypes
 
         kernel32 = ctypes.windll.kernel32
+
+        # Install a console control handler that swallows Ctrl+C
+        # (returns True = signal handled, don't pass to next handler)
+        PHANDLER_ROUTINE = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
+        @PHANDLER_ROUTINE
+        def _ctrl_handler(ctrl_type):
+            if ctrl_type == 0:  # CTRL_C_EVENT
+                return True     # handled — don't terminate
+            return False        # pass to next handler
+
+        if not kernel32.SetConsoleCtrlHandler(_ctrl_handler, True):
+            return  # couldn't install handler, keep default behavior
+
+        # Enable QuickEdit (mouse select + right-click copy) and
+        # virtual terminal sequences for ANSI color support.
         STD_INPUT_HANDLE = -10
-        ENABLE_PROCESSED_INPUT = 0x0001
         ENABLE_QUICK_EDIT_MODE = 0x0040
         ENABLE_EXTENDED_FLAGS = 0x0080
 
         h = kernel32.GetStdHandle(STD_INPUT_HANDLE)
         if h == -1:
-            return  # no console (e.g. piped input)
+            return
 
         mode = ctypes.c_uint32()
         if not kernel32.GetConsoleMode(h, ctypes.byref(mode)):
             return
 
-        # Disable processed input → Ctrl+C becomes regular keystroke,
-        # not a SIGINT signal. The app's crash handler won't fire.
-        # Enable QuickEdit (mouse copy) + extended flags (Ctrl+V paste).
-        new_mode = mode.value & ~ENABLE_PROCESSED_INPUT
-        new_mode |= ENABLE_QUICK_EDIT_MODE | ENABLE_EXTENDED_FLAGS
-        kernel32.SetConsoleMode(h, new_mode)
+        mode.value |= ENABLE_QUICK_EDIT_MODE | ENABLE_EXTENDED_FLAGS
+        kernel32.SetConsoleMode(h, mode.value)
 
-        # Also fix the output handle — enable virtual terminal sequences
-        # for ANSI/color support (Rich needs this on older Windows)
+        # Also enable virtual terminal processing on output
         STDOUT_HANDLE = -11
         ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
         ho = kernel32.GetStdHandle(STDOUT_HANDLE)
