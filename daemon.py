@@ -373,6 +373,18 @@ class DaemonManager:
         """Return current daemon status as a dict."""
         pid = read_pid()
         if not pid or not is_process_alive(pid):
+            # PID file missing or process dead — try HTTP API as fallback
+            try:
+                resp = urllib.request.urlopen(f"http://127.0.0.1:{DEFAULT_PORT}/status", timeout=1)
+                data = json.loads(resp.read().decode())
+                if data.get("running"):
+                    # Daemon is alive, PID file just got lost — restore it
+                    live_pid = data.get("pid")
+                    if live_pid:
+                        write_pid(live_pid)
+                    return data
+            except Exception:
+                pass
             return {"running": False, "pid": None, "uptime": None, "streams": []}
 
         # Try to get detailed status from the HTTP API
