@@ -1338,7 +1338,7 @@ def show_prep_phase():
                     if pd != "??:??:??":
                         pp = pd.split(":")
                         if len(pp) == 3:
-                            total_sec += int(pp[0]) * 3600 + int(pp[1]) * 60 + int(pp[2])
+                            total_sec += int(pp[0]) * 3600 + int(pp[1]) * 60 + int(float(pp[2]))
                 if total_sec > 0:
                     h, r = divmod(total_sec, 3600)
                     m, s = divmod(r, 60)
