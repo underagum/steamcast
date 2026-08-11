@@ -2686,36 +2686,19 @@ def show_daemon_menu():
                 from attach import attach as _attach
                 _attach()
             else:
-                # Start
-                console.print("\nStarting daemon...")
-                try:
-                    cfg = load_config()
-                    cmd_start(cfg)
-                except DaemonError as e:
-                    console.print(f"[red]✗ {e}[/]")
-                except KeyboardInterrupt:
-                    console.print("\n[yellow]Start cancelled.[/]")
-                else:
-                    console.print("[green]Daemon started.[/]")
+                # Start (unified: systemd or double-fork)
+                console.print()
+                _unified_start(service_installed)
 
         elif choice == "2" and running:
-            console.print("\nStopping daemon...")
-            try:
-                cmd_stop()
-            except DaemonError as e:
-                console.print(f"[red]✗ {e}[/]")
+            console.print()
+            _unified_stop(service_installed)
 
         elif choice == "3" and running:
             console.print("\nRestarting daemon...")
-            try:
-                cmd_stop()
-                time.sleep(1)
-                cfg = load_config()
-                cmd_start(cfg)
-            except DaemonError as e:
-                console.print(f"[red]✗ {e}[/]")
-            else:
-                console.print("[green]✅ Daemon restarted.[/]")
+            _unified_stop(service_installed)
+            time.sleep(2)
+            _unified_start(service_installed)
 
         elif choice == "4":
             if service_installed:
@@ -2828,11 +2811,62 @@ def main():
         show_main_menu()
 
 
+def _unified_start(has_service: bool):
+    """Start daemon — via systemd if available, else double-fork."""
+    from daemon import cmd_start, load_config, DaemonError
+
+    if has_service:
+        print("Starting SteamCast daemon via systemd...")
+        try:
+            subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast"], check=True)
+            print("🔵 Daemon started + enabled (survives reboot).")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ systemctl failed: {e}")
+    else:
+        config = load_config()
+        print("Starting SteamCast daemon...")
+        try:
+            cmd_start(config)
+        except DaemonError as e:
+            print(f"❌ {e}")
+
+
+def _unified_stop(has_service: bool):
+    """Stop daemon — via systemd if available, else direct SIGTERM."""
+    from daemon import cmd_stop, DaemonError
+
+    # If called from systemd's ExecStop, send SIGTERM directly (avoid recursion)
+    if os.environ.get("INVOCATION_ID"):
+        try:
+            cmd_stop()
+        except DaemonError as e:
+            print(f"❌ {e}")
+        return
+
+    if has_service:
+        print("Stopping SteamCast daemon via systemd...")
+        try:
+            subprocess.run(["sudo", "systemctl", "stop", "steamcast"], check=True)
+            subprocess.run(["sudo", "systemctl", "disable", "--quiet", "steamcast"], check=True)
+            print("🔧 Daemon stopped + disabled (won't auto-start on reboot).")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ systemctl failed: {e}")
+    else:
+        try:
+            cmd_stop()
+        except DaemonError as e:
+            print(f"❌ {e}")
+
+
 def _cmd_daemon():
     """Handle 'steamcast daemon {start|stop|status|attach|service {install|uninstall}|schedule}'."""
     from daemon import cmd_start, cmd_stop, cmd_status, load_config, DaemonError
 
     sub = sys.argv[2].lower() if len(sys.argv) > 2 else "status"
+
+    # Detect systemd service
+    unit_path = "/etc/systemd/system/steamcast.service"
+    has_service = os.path.exists(unit_path)
 
     # ste steamcast daemon service install/uninstall
     if sub == "service":
@@ -2852,20 +2886,18 @@ def _cmd_daemon():
             return
 
     if sub == "start":
-        config = load_config()
         foreground = "--foreground" in sys.argv or "-f" in sys.argv
-        print("Starting SteamCast daemon...")
-        try:
-            cmd_start(config, foreground=foreground)
-        except DaemonError as e:
-            print(f"❌ {e}")
-            sys.exit(1)
+        if foreground:
+            config = load_config()
+            try:
+                cmd_start(config, foreground=True)
+            except DaemonError as e:
+                print(f"❌ {e}")
+                sys.exit(1)
+        else:
+            _unified_start(has_service)
     elif sub == "stop":
-        try:
-            cmd_stop()
-        except DaemonError as e:
-            print(f"❌ {e}")
-            sys.exit(1)
+        _unified_stop(has_service)
     elif sub == "status":
         st = cmd_status()
         if st.get("running"):
