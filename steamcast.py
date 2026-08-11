@@ -2814,11 +2814,17 @@ def main():
 def _unified_start(has_service: bool):
     """Start daemon — via systemd if available, else double-fork."""
     from daemon import cmd_start, load_config, DaemonError
+    from daemon import read_pid
 
     if has_service:
         print("Starting SteamCast daemon via systemd...")
         try:
             subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast"], check=True)
+            # systemctl returns before daemon is fully ready — wait for PID
+            for _ in range(10):
+                if read_pid():
+                    break
+                time.sleep(0.5)
             print("🔵 Daemon started + enabled (survives reboot).")
         except subprocess.CalledProcessError as e:
             print(f"❌ systemctl failed: {e}")
