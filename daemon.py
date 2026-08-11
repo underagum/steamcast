@@ -352,6 +352,8 @@ class DaemonManager:
                 else:
                     print(f"\n     ⚠ Port {DEFAULT_PORT} still in use after 60s. "
                           f"Wait before restarting.")
+                # Stop means stop — disable auto-start on reboot
+                self._disable_service_if_enabled()
                 return
             time.sleep(0.5)
 
@@ -366,6 +368,7 @@ class DaemonManager:
             else:
                 print(f"\n     ⚠ Port {DEFAULT_PORT} still in use after 60s. "
                       f"Wait before restarting.")
+            self._disable_service_if_enabled()
         except OSError:
             raise DaemonError("Could not kill daemon process.")
 
@@ -404,6 +407,24 @@ class DaemonManager:
             return {"running": True, "pid": pid, "uptime": uptime, "streams": []}
 
     # ── Internal ──
+
+    @staticmethod
+    def _disable_service_if_enabled():
+        """Disable systemd auto-start if the service is currently enabled."""
+        unit_path = "/etc/systemd/system/steamcast.service"
+        if not os.path.exists(unit_path):
+            return
+        # Don't disable when called from systemd's ExecStop
+        if os.environ.get("INVOCATION_ID"):
+            return
+        try:
+            subprocess.run(["sudo", "systemctl", "disable", "--quiet", "steamcast"],
+                          check=True, capture_output=True)
+            print("🔧 System service disabled — won't auto-start on reboot.")
+            print("   Re-enable: steamcast daemon install")
+        except subprocess.CalledProcessError:
+            # sudo unavailable — user can do it manually
+            pass
 
     @staticmethod
     def _wait_port_free(timeout: float = 60) -> bool:
