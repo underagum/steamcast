@@ -2653,8 +2653,8 @@ def show_daemon_menu():
             console.print("  [white][4][/] Uninstall system service")
             console.print("       [dim]Remove auto-start, keep daemon config[/]")
         else:
-            console.print("  [white][4][/] Install as system service")
-            console.print("       [dim]Survives reboot — starts automatically on boot[/]")
+            console.print("  [white][4][/] Install system service")
+            console.print("       [dim]Enable auto-start on boot (survives reboot)[/]")
 
         console.print("  [white][5][/] Schedule broadcast")
         console.print("       [dim]Set start + end datetime via systemd timer[/]")
@@ -2829,10 +2829,27 @@ def main():
 
 
 def _cmd_daemon():
-    """Handle 'steamcast daemon start|stop|status|attach'."""
+    """Handle 'steamcast daemon {start|stop|status|attach|service {install|uninstall}|schedule}'."""
     from daemon import cmd_start, cmd_stop, cmd_status, load_config, DaemonError
 
     sub = sys.argv[2].lower() if len(sys.argv) > 2 else "status"
+
+    # ste steamcast daemon service install/uninstall
+    if sub == "service":
+        if len(sys.argv) < 4:
+            print("Usage: steamcast daemon service {install|uninstall}")
+            return
+        sub = sys.argv[3].lower()
+        if sub == "install":
+            _cmd_daemon_install_handler()
+            return
+        elif sub == "uninstall":
+            _uninstall_systemd_service()
+            return
+        else:
+            print(f"Unknown service subcommand: {sub}")
+            print("Usage: steamcast daemon service {install|uninstall}")
+            return
 
     if sub == "start":
         config = load_config()
@@ -2874,24 +2891,16 @@ def _cmd_daemon():
     elif sub == "attach":
         _cmd_attach()
     elif sub == "install":
-        # Stop existing daemon first (avoid port/PID conflict)
-        st = cmd_status()
-        if st.get("running"):
-            print("🛑 Stopping existing daemon...")
-            try:
-                cmd_stop()
-                print("   Daemon stopped.")
-            except DaemonError:
-                print("   ⚠ Could not stop gracefully — continuing anyway.")
-            print()
-        _install_systemd_service()
+        # Backward-compat alias for 'steamcast daemon service install'
+        _cmd_daemon_install_handler()
     elif sub == "uninstall":
+        # Backward-compat alias for 'steamcast daemon service uninstall'
         _uninstall_systemd_service()
     elif sub == "schedule":
         _cmd_schedule()
     else:
         print(f"Unknown daemon subcommand: {sub}")
-        print("Usage: steamcast daemon {start|stop|status|attach|install|uninstall|schedule}")
+        print("Usage: steamcast daemon {start|stop|status|attach|service {install|uninstall}|schedule}")
 
 
 def _schedule_menu():
@@ -3059,6 +3068,21 @@ def _cmd_schedule():
 def _ensure_schedule_dir():
     """Create daemon config directory if missing."""
     os.makedirs(os.path.expanduser("~/.steamcast"), exist_ok=True)
+
+
+def _cmd_daemon_install_handler():
+    """Stop existing daemon (if running), then install systemd service."""
+    from daemon import cmd_status, cmd_stop, DaemonError
+    st = cmd_status()
+    if st.get("running"):
+        print("🛑 Stopping existing daemon...")
+        try:
+            cmd_stop()
+            print("   Daemon stopped.")
+        except DaemonError:
+            print("   ⚠ Could not stop gracefully — continuing anyway.")
+        print()
+    _install_systemd_service()
 
 
 def _install_systemd_service():

@@ -421,7 +421,7 @@ class DaemonManager:
             subprocess.run(["sudo", "systemctl", "disable", "--quiet", "steamcast"],
                           check=True, capture_output=True)
             print("🔧 System service disabled — won't auto-start on reboot.")
-            print("   Re-enable: steamcast daemon install")
+            print("   Re-enable: steamcast daemon service install")
         except subprocess.CalledProcessError:
             # sudo unavailable — user can do it manually
             pass
