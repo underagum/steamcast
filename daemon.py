@@ -299,16 +299,22 @@ class DaemonManager:
         """Stop the daemon gracefully."""
         pid = read_pid()
         if not pid:
+            # Idempotent success in systemd-executed contexts (ExecStop,
+            # schedule stop-trigger): a missing PID file is normal there —
+            # the daemon already exited (or never ran under this service).
+            if os.environ.get("INVOCATION_ID"):
+                logger.info("No PID file (systemd context) — nothing to stop.")
+                print("✅ Daemon already stopped (no PID file).")
+                return
             # Before giving up, try systemctl if service is installed
-            # (skip if called from systemd ExecStop to avoid recursion)
             unit_path = "/etc/systemd/system/steamcast.service"
-            if os.path.exists(unit_path) and not os.environ.get("INVOCATION_ID"):
+            if os.path.exists(unit_path):
                 logger.info("No PID file — trying systemctl stop instead.")
                 try:
                     subprocess.run(["sudo", "systemctl", "stop", "steamcast"], check=True)
                     print("✅ System service stopped via systemctl.")
                     return
-                except subprocess.CalledProcessError as e:
+                except subprocess.CalledProcessError:
                     pass  # fall through to error below
             raise DaemonError("No PID file found. Daemon is not running.")
 
