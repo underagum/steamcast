@@ -3140,6 +3140,11 @@ def _do_schedule(start_dt=None, end_dt=None, clear=False):
     schedule.json is the single source of truth (start/end absolute).
     duration_hours is NOT used — daemon self-stops by re-reading
     schedule.json in its monitor loop.
+
+    Commands compose (merge into schedule.json):
+      schedule "T"             → arm START (keep existing end, if any)
+      stop "T"                 → arm STOP  (keep existing start, if any)
+      schedule "T1" "T2"       → arm BOTH
     """
     _ensure_schedule_dir()
 
@@ -3151,26 +3156,37 @@ def _do_schedule(start_dt=None, end_dt=None, clear=False):
         print("   Daemon now runs until manually stopped.")
         return
 
-    if end_dt is None:
-        print("❌ No end time provided.")
+    if start_dt is None and end_dt is None:
+        print("❌ No datetime provided.")
         return
 
-    schedule: dict = {"created": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    # Merge with any existing schedule (composable commands)
+    schedule = _read_schedule()
+    if not schedule:
+        schedule = {"created": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
     if start_dt is not None:
         schedule["start"] = start_dt.strftime("%Y-%m-%d %H:%M:%S")
-    schedule["end"] = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+    if end_dt is not None:
+        schedule["end"] = end_dt.strftime("%Y-%m-%d %H:%M:%S")
 
-    # Sanity: end must be in the future
-    if end_dt <= datetime.now():
+    now = datetime.now()
+    end_dt = datetime.strptime(schedule["end"], "%Y-%m-%d %H:%M:%S") if schedule.get("end") else None
+    start_dt = datetime.strptime(schedule["start"], "%Y-%m-%d %H:%M:%S") if schedule.get("start") else None
+
+    # Sanity checks
+    if end_dt and end_dt <= now:
         print("❌ End time must be in the future.")
         return
-    if start_dt is not None and end_dt <= start_dt:
+    if start_dt and start_dt <= now:
+        print("❌ Start time must be in the future.")
+        return
+    if start_dt and end_dt and end_dt <= start_dt:
         print("❌ End must be after start.")
         return
 
     print(f"📅 Scheduling broadcast:")
-    print(f"   Start:  {schedule.get('start', '(manual start — no start timer)')}")
-    print(f"   End:    {schedule['end']}  (absolute — no drift)")
+    print(f"   Start:  {schedule.get('start', '(not set — manual start)')}")
+    print(f"   End:    {schedule.get('end', '(not set — runs until stopped)')}")
     print()
     print("🔐 sudo required for timer install.")
 
@@ -3186,18 +3202,18 @@ def _do_schedule(start_dt=None, end_dt=None, clear=False):
         for path, content in _schedule_units(schedule):
             subprocess.run(["sudo", "tee", path], input=content, text=True, check=True)
 
-        # 4. Reload + arm timers
+        # 4. Reload + arm timers (only the ones that exist)
         subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
-        if start_dt is not None:
+        if schedule.get("start"):
             subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast-schedule-start.timer"], check=True)
-        if end_dt is not None:
+        if schedule.get("end"):
             subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast-schedule-stop.timer"], check=True)
 
         # 5. Keep main service disabled — timers/triggers control the window
         subprocess.run(["sudo", "systemctl", "disable", "steamcast.service"], check=True)
 
         print()
-        print("✅ Schedule set! (absolute start + stop)")
+        print("✅ Schedule set!")
         print(f"   Check:   steamcast daemon schedule")
         print(f"   Clear:   steamcast daemon schedule --clear")
     except subprocess.CalledProcessError as e:
@@ -3284,28 +3300,30 @@ def _cmd_schedule():
                             "--no-pager"], check=False)
         else:
             print("📅 No schedule set.")
-            print("   Usage: steamcast daemon schedule \"20260815 09:00\" \"20260815 18:00\"")
-            print("          steamcast daemon schedule \"20260815 18:00\"   (stop-only)")
+            print("   Usage: steamcast daemon schedule \"20260815 09:00\"              (start-only)")
+            print("          steamcast daemon schedule \"20260815 09:00\" \"20260815 18:00\"  (full window)")
+            print("          steamcast daemon stop \"20260815 18:00\"                   (stop-only)")
         return
 
     if len(args) == 1 and args[0] == "--clear":
         _do_schedule(clear=True)
         return
 
-    # Stop-only: steamcast daemon schedule "YYYYMMDD HH:MM"  (2 args)
+    # Start-only: steamcast daemon schedule "YYYYMMDD HH:MM"  (2 args)
     if len(args) == 2:
         try:
-            end_dt = datetime.strptime(f"{args[0]} {args[1]}", "%Y%m%d %H:%M")
+            start_dt = datetime.strptime(f"{args[0]} {args[1]}", "%Y%m%d %H:%M")
         except ValueError:
             print("❌ Invalid datetime format. Expected YYYYMMDD HH:MM")
             return
-        _do_schedule(end_dt=end_dt)
+        _do_schedule(start_dt=start_dt)
         return
 
     # Full window: steamcast daemon schedule "START" "END"  (4 args)
     if len(args) != 4:
-        print("❌ Usage: steamcast daemon schedule \"YYYYMMDD HH:MM\" \"YYYYMMDD HH:MM\"")
-        print("          steamcast daemon schedule \"YYYYMMDD HH:MM\"   (stop-only)")
+        print("❌ Usage: steamcast daemon schedule \"YYYYMMDD HH:MM\"            (start-only)")
+        print("          steamcast daemon schedule \"YYYYMMDD HH:MM\" \"YYYYMMDD HH:MM\"  (full window)")
+        print("          steamcast daemon stop \"YYYYMMDD HH:MM\"                (stop-only)")
         return
 
     start_str = f"{args[0]} {args[1]}"
