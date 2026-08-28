@@ -42,6 +42,8 @@ from pathlib import Path
 from threading import Thread
 from typing import Optional
 
+from liveness import probe_stream, probe_with_retries
+
 # ── Helpers ──
 
 STEAMCAST_DIR = Path.home() / ".steamcast"
@@ -522,13 +524,23 @@ class DaemonManager:
                     "bitrate": bitrate,
                     "video": str(video),
                     "stream_key": game.get("stream_key", ""),
+                    "appid": game.get("appid", ""),
                     "started_at": datetime.now().isoformat(),
-                    "status": "LIVE",
+                    # PUSHED = transmitting to Steam RTMP; promoted to LIVE only
+                    # once the storefront probe confirms visibility.
+                    "status": "PUSHED",
+                    "storefront": None,
                     "start_args": args,
                 }
             time.sleep(2)
 
         self._log(f"All {len(self._active_streams)} streams launched.")
+
+        # Storefront verification thread — promotes PUSHED → LIVE when the
+        # storefront confirms the broadcast (or demotes LIVE → PUSHED if it
+        # disappears). Runs continuously so status stays honest.
+        verification_thread = Thread(target=self._storefront_loop, daemon=True)
+        verification_thread.start()
 
         # ── Monitor loop ──
         while self._running:
@@ -570,7 +582,9 @@ class DaemonManager:
                             )
                             stream["proc"] = new_proc
                             proc = new_proc  # update local ref for status check below
-                            stream["status"] = "LIVE"
+                            # Reconnected = back to PUSHED until storefront re-confirms.
+                            stream["status"] = "PUSHED"
+                            stream["storefront"] = None
                             stream["started_at"] = datetime.now().isoformat()
                             self._log(f"↻ {gname} reconnected (PID {new_proc.pid})")
                         else:
@@ -578,12 +592,82 @@ class DaemonManager:
                             self._log(f"✗ {gname} — start args missing, cannot reconnect")
 
                     if proc and proc.poll() is None:
-                        stream["status"] = "LIVE"
+                        # ffmpeg alive → PUSHED floor; LIVE only via storefront probe
+                        if stream.get("status") != "LIVE":
+                            stream["status"] = "PUSHED"
 
             self._write_state()
             time.sleep(5)
 
         self._stop_all_streams("engine_stop")
+
+    def _storefront_loop(self):
+        """Continuously verify storefront visibility for active streams.
+
+        Promotes PUSHED → LIVE when the anonymous Steam broadcast API confirms
+        the stream is visible on the storefront, and demotes LIVE → PUSHED if
+        the storefront stops showing it (while ffmpeg still transmits).
+
+        Retry policy: a stream whose ``storefront`` dict is None has not been
+        confirmed since its last (re)start — Steam's storefront registration
+        lags the RTMP connect by ~5-40s, so those get probe_with_retries
+        (benefit of the doubt). Once any probe result is recorded, later
+        passes use a single probe. Transitions only happen on *clean* probes:
+        a probe error (timeout, 5xx, bad JSON) says nothing about storefront
+        visibility, so it never demotes a LIVE stream (or promotes one).
+        """
+        while self._running:
+            with self._streams_lock:
+                targets = [
+                    (gname, stream, stream.get("proc"), stream.get("storefront") is None)
+                    for gname, stream in self._active_streams.items()
+                    if stream.get("proc") and stream["proc"].poll() is None
+                ]
+            if not targets:
+                time.sleep(10)
+                continue
+
+            for gname, stream, proc_ref, unconfirmed in targets:
+                if not self._running:
+                    break
+                key = stream.get("stream_key", "")
+                if not key:
+                    continue
+                try:
+                    if unconfirmed:
+                        result = probe_with_retries(key, attempts=3, delay=10.0)
+                    else:
+                        result = probe_stream(key)
+                except Exception as e:
+                    logger.warning("Storefront probe failed for %s: %s", gname, e)
+                    continue
+
+                online = bool(result.get("online"))
+                err = result.get("error")
+                with self._streams_lock:
+                    # The monitor loop may have reconnected this stream (new
+                    # Popen object) while we probed — this result describes
+                    # the previous incarnation. Discard it: storefront stays
+                    # None so the next pass re-probes with retries.
+                    if stream.get("proc") is not proc_ref:
+                        continue
+                    if online and not err and stream.get("status") == "PUSHED":
+                        stream["status"] = "LIVE"
+                        self._log(f"✅ {gname} LIVE on storefront (confirmed by probe)")
+                    elif not online and not err and stream.get("status") == "LIVE":
+                        stream["status"] = "PUSHED"
+                        self._log(f"⚠ {gname} no longer visible on storefront — back to PUSHED")
+                    stream["storefront"] = {
+                        "online": online,
+                        "appid": result.get("appid"),
+                        "title": result.get("title"),
+                        "resolution": result.get("resolution"),
+                        "bandwidth_kbps": result.get("bandwidth_kbps"),
+                        "hls_url": result.get("hls_url"),
+                        "error": result.get("error"),
+                    }
+
+            time.sleep(30)
 
     def _kill_all_streams(self):
         """Kill all ffmpeg processes. Existing reconnect logic will respawn them."""
@@ -593,6 +677,11 @@ class DaemonManager:
                 if proc and proc.poll() is None:
                     proc.kill()
                     logger.info("Killed stream: %s (PID %d)", gname, proc.pid)
+                    # Back to PUSHED + unconfirmed until the storefront
+                    # re-verifies the restarted ingest (reconnect would also
+                    # reset these, but don't show a stale LIVE meanwhile).
+                    stream["status"] = "PUSHED"
+                    stream["storefront"] = None
         self._log("♻ All streams killed — reconnect will pick them up.")
         time.sleep(2)
 
@@ -641,6 +730,8 @@ class DaemonManager:
                         "bitrate": s.get("bitrate", "?"),
                         "started_at": s.get("started_at", ""),
                         "pid": s.get("proc", None) and (s["proc"].pid or None),
+                        "appid": s.get("appid", ""),
+                        "storefront": s.get("storefront"),
                     }
                     for gname, s in self._active_streams.items()
                 },
@@ -671,8 +762,11 @@ class SteamCastDaemonServer:
 
             def do_GET(self):
                 if self.path in ("/status", "/"):
+                    # Build the payload under the lock, but send the response
+                    # (socket I/O) outside it — a stalled HTTP client would
+                    # otherwise block the monitor and storefront threads.
                     with daemon._streams_lock:
-                        self._send_json({
+                        payload = {
                             "running": True,
                             "pid": os.getpid(),
                             "uptime": daemon._uptime_str(),
@@ -683,10 +777,13 @@ class SteamCastDaemonServer:
                                     "bitrate": s.get("bitrate", ""),
                                     "pid": proc.pid if (proc := s.get("proc")) and proc.poll() is None else None,
                                     "started_at": s.get("started_at", ""),
+                                    "appid": s.get("appid", ""),
+                                    "storefront": s.get("storefront"),
                                 }
                                 for gname, s in daemon._active_streams.items()
                             ],
-                        })
+                        }
+                    self._send_json(payload)
                 elif self.path.startswith("/logs"):
                     n = 50
                     if "?n=" in self.path:
@@ -835,6 +932,7 @@ def load_config() -> dict:
             "bitrate": "5000k",
             "video": str(video_path),
             "stream_key": stream_key,
+            "appid": gdata.get("appid", ""),
         })
 
     return config

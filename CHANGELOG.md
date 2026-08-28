@@ -1,10 +1,27 @@
 # Changelog
 
-## Unreleased
+## v2.0.0 — 2026-08-28
+
+### Added
+
+- **Storefront liveness verification (`liveness.py`).** New module deriving the broadcaster steamid64 directly from the RTMP key (`steam_<accountid>_<hash>` → `76561197960265728 + accountid`) and probing Steam's anonymous broadcast API (`getbroadcastinfo` → `is_online`, `getbroadcastmpd` → HLS manifest) to confirm a stream is *actually visible on the storefront* — no page scraping, no thumbnails, no auth. `probe_with_retries()` gives fresh streams benefit-of-the-doubt (3 × 10 s) because storefront registration lags the RTMP connect.
+- **PUSHED vs LIVE stream states in the daemon.** A stream is `PUSHED` the moment ffmpeg transmits to Steam RTMP; it is promoted to `LIVE` only after the storefront probe confirms visibility (HLS manifest parses with real resolution/bitrate). A background `_storefront_loop` re-probes every 30 s, promoting `PUSHED → LIVE`, demoting `LIVE → PUSHED` if the storefront stops showing the stream, and resetting to `PUSHED` on reconnect. State is exposed in `daemon status`, the HTTP `/status` API, and `state.json`.
+- **AppID in game profiles.** `config.json` games now carry an `appid` field; the Setup menu prompts for it when adding or editing a game. Displayed in status output alongside storefront specs.
 
 ### Changed
 
 - **CAST scheduling removed.** The interactive CAST menu no longer offers `[SCH]` delayed-start / auto-stop broadcasts — the start/end datetime prompts, pre-start countdown, and monitor-loop auto-stop were removed from `run_cast_stream()`. CAST now always starts immediately; the `restart_every_hours` auto-restart (default 4h) is unchanged. Scheduling lives exclusively in the headless daemon (`steamcast daemon schedule` / Daemon Manager `[5]`), which owns absolute start/end via systemd timers.
+- **`daemon status` table shows Storefront column.** `🟢 LIVE` includes confirmed specs (`✅ 1920x1080 · 5006k`); `🟡 PUSHED` shows "awaiting storefront confirm" (or the probe error when one exists); summary line counts both states.
+
+### Fixed
+
+- **Storefront probe only transitions on clean probes.** Transient probe errors (timeout, 5xx, bad JSON) update the storefront dict but never demote a LIVE stream or promote a PUSHED one — no false flicker under rate-limiting.
+- **Reconnect retry burst.** Per-stream retry-until-first-confirmation replaces the old one-shot first pass, so streams that (re)connect mid-run get the 3 × 10 s benefit-of-the-doubt immediately (Steam's HLS provisioning lags the RTMP connect by ~5–40 s).
+- **Stale-probe race guard.** A probe result from before a reconnect can no longer clobber the reconnect's reset.
+- **HTTP `/status` lock safety.** Payload is built under the streams lock and sent outside it — a stalled client can no longer block the monitor and storefront threads.
+- **`_kill_all_streams` resets state.** Killed streams return to `PUSHED` with `storefront: null` instead of showing stale `LIVE` until the next probe.
+- **Robust JSON handling in probes.** Non-object responses from Steam are recorded as errors instead of crashing `probe_stream`; invalid RTMP keys are never retried (they cannot become valid by waiting).
+- **PUSHED rows surface probe errors** in `daemon status` instead of "awaiting confirm" forever; live attach dashboard renders PUSHED as 🟡.
 
 ## v1.6.2 — 2026-08-03
 
