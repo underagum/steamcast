@@ -2987,15 +2987,26 @@ ExecStart={launcher} daemon schedule --stop-trigger
     return units
 
 
-def _clear_schedule_units():
-    """Stop, disable, and remove both schedule timers + services (idempotent)."""
+def _clear_schedule_units(from_stop_trigger: bool = False):
+    """Stop, disable, and remove both schedule timers + services (idempotent).
+
+    from_stop_trigger=True → skip stopping/disabling the stop service itself:
+    when called from inside steamcast-schedule-stop.service, stopping it
+    would TERMINATE the cleanup (systemctl stop on the running unit kills it
+    mid-loop). Its unit file is still removed; daemon-reload drops it.
+    """
     for path in (TIMER_START, SVC_START, TIMER_STOP, SVC_STOP):
         # Full unit name WITH suffix — must match the sudoers rules exactly
         name = os.path.basename(path)
-        if os.path.exists(path):
-            subprocess.run(["sudo", "systemctl", "stop", name], check=False)
-            subprocess.run(["sudo", "systemctl", "disable", name], check=False)
+        if not os.path.exists(path):
+            continue
+        if from_stop_trigger and path == SVC_STOP:
+            # We ARE this service — remove the file, don't stop ourselves
             subprocess.run(["sudo", "rm", "-f", path], check=True)
+            continue
+        subprocess.run(["sudo", "systemctl", "stop", name], check=False)
+        subprocess.run(["sudo", "systemctl", "disable", name], check=False)
+        subprocess.run(["sudo", "rm", "-f", path], check=True)
     subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
 
 
@@ -3219,7 +3230,7 @@ def _schedule_stop_trigger():
     else:
         print("   (no systemd service — daemon self-stops via schedule.json monitor loop)")
     try:
-        _clear_schedule_units()
+        _clear_schedule_units(from_stop_trigger=True)
     except Exception as e:
         print(f"⚠ Cleanup partial: {e}")
         sys.exit(1)
