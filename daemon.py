@@ -608,31 +608,33 @@ class DaemonManager:
         the stream is visible on the storefront, and demotes LIVE → PUSHED if
         the storefront stops showing it (while ffmpeg still transmits).
 
-        Uses probe_with_retries on first sight so freshly-started streams
-        (whose storefront registration lags the RTMP connect) get
-        benefit-of-the-doubt before being marked anything but PUSHED.
+        Retry policy: a stream whose ``storefront`` dict is None has not been
+        confirmed since its last (re)start — Steam's storefront registration
+        lags the RTMP connect by ~5-40s, so those get probe_with_retries
+        (benefit of the doubt). Once any probe result is recorded, later
+        passes use a single probe. Transitions only happen on *clean* probes:
+        a probe error (timeout, 5xx, bad JSON) says nothing about storefront
+        visibility, so it never demotes a LIVE stream (or promotes one).
         """
-        first_pass = True
         while self._running:
             with self._streams_lock:
                 targets = [
-                    (gname, stream)
+                    (gname, stream, stream.get("proc"), stream.get("storefront") is None)
                     for gname, stream in self._active_streams.items()
                     if stream.get("proc") and stream["proc"].poll() is None
                 ]
             if not targets:
-                first_pass = True
                 time.sleep(10)
                 continue
 
-            for gname, stream in targets:
+            for gname, stream, proc_ref, unconfirmed in targets:
                 if not self._running:
                     break
                 key = stream.get("stream_key", "")
                 if not key:
                     continue
                 try:
-                    if first_pass:
+                    if unconfirmed:
                         result = probe_with_retries(key, attempts=3, delay=10.0)
                     else:
                         result = probe_stream(key)
@@ -641,11 +643,18 @@ class DaemonManager:
                     continue
 
                 online = bool(result.get("online"))
+                err = result.get("error")
                 with self._streams_lock:
-                    if online and stream.get("status") == "PUSHED":
+                    # The monitor loop may have reconnected this stream (new
+                    # Popen object) while we probed — this result describes
+                    # the previous incarnation. Discard it: storefront stays
+                    # None so the next pass re-probes with retries.
+                    if stream.get("proc") is not proc_ref:
+                        continue
+                    if online and not err and stream.get("status") == "PUSHED":
                         stream["status"] = "LIVE"
                         self._log(f"✅ {gname} LIVE on storefront (confirmed by probe)")
-                    elif not online and stream.get("status") == "LIVE":
+                    elif not online and not err and stream.get("status") == "LIVE":
                         stream["status"] = "PUSHED"
                         self._log(f"⚠ {gname} no longer visible on storefront — back to PUSHED")
                     stream["storefront"] = {
@@ -658,7 +667,6 @@ class DaemonManager:
                         "error": result.get("error"),
                     }
 
-            first_pass = False
             time.sleep(30)
 
     def _kill_all_streams(self):
@@ -669,6 +677,11 @@ class DaemonManager:
                 if proc and proc.poll() is None:
                     proc.kill()
                     logger.info("Killed stream: %s (PID %d)", gname, proc.pid)
+                    # Back to PUSHED + unconfirmed until the storefront
+                    # re-verifies the restarted ingest (reconnect would also
+                    # reset these, but don't show a stale LIVE meanwhile).
+                    stream["status"] = "PUSHED"
+                    stream["storefront"] = None
         self._log("♻ All streams killed — reconnect will pick them up.")
         time.sleep(2)
 
@@ -749,8 +762,11 @@ class SteamCastDaemonServer:
 
             def do_GET(self):
                 if self.path in ("/status", "/"):
+                    # Build the payload under the lock, but send the response
+                    # (socket I/O) outside it — a stalled HTTP client would
+                    # otherwise block the monitor and storefront threads.
                     with daemon._streams_lock:
-                        self._send_json({
+                        payload = {
                             "running": True,
                             "pid": os.getpid(),
                             "uptime": daemon._uptime_str(),
@@ -766,7 +782,8 @@ class SteamCastDaemonServer:
                                 }
                                 for gname, s in daemon._active_streams.items()
                             ],
-                        })
+                        }
+                    self._send_json(payload)
                 elif self.path.startswith("/logs"):
                     n = 50
                     if "?n=" in self.path:

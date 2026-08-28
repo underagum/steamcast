@@ -2833,7 +2833,10 @@ def _cmd_daemon():
                         sf_txt = f"✅ {sf.get('resolution') or '?'} · {sf.get('bandwidth_kbps') or '?'}k"
                     elif sts == "PUSHED":
                         icon = "🟡"
-                        sf_txt = "⏳ awaiting storefront confirm"
+                        sf_err = sf.get("error")
+                        # Show the probe error when one exists — "awaiting
+                        # confirm" forever hides hard failures (bad key, etc.)
+                        sf_txt = f"⏳ {sf_err}" if sf_err else "⏳ awaiting storefront confirm"
                     elif sts == "DEAD":
                         icon = "🔴"
                         sf_txt = "—"

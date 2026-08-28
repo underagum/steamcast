@@ -13,7 +13,8 @@ Pipeline:
     4. GET hls_url (master.m3u8)
        → parse EXT-X-STREAM-INF: BANDWIDTH / RESOLUTION / CODECS
 
-LIVE  = is_online true AND hls manifest parses with stream specs
+LIVE  = probe with no error: is_online true AND hls manifest fetch succeeds
+        (resolution/bitrate parsed when the manifest carries EXT-X-STREAM-INF)
 PUSHED = ffmpeg is transmitting but storefront not (yet) confirmed
 
 Why not the old thumbnail method: the community broadcasts hub page is
@@ -99,6 +100,10 @@ def probe_stream(rtmp_key: str) -> dict:
     except Exception as e:
         result["error"] = f"getbroadcastinfo: {e}"
         return result
+    if not isinstance(info, dict):
+        # Steam sometimes answers errors with JSON that isn't an object.
+        result["error"] = f"getbroadcastinfo: unexpected response ({type(info).__name__})"
+        return result
 
     result["appid"] = info.get("appid")
     result["title"] = info.get("app_title")
@@ -110,6 +115,9 @@ def probe_stream(rtmp_key: str) -> dict:
         mpd = _get_json(f"https://steamcommunity.com/broadcast/getbroadcastmpd/?steamid={sid}")
     except Exception as e:
         result["error"] = f"getbroadcastmpd: {e}"
+        return result
+    if not isinstance(mpd, dict):
+        result["error"] = f"getbroadcastmpd: unexpected response ({type(mpd).__name__})"
         return result
 
     hls = mpd.get("hls_url")
@@ -142,10 +150,15 @@ def probe_with_retries(rtmp_key: str, attempts: int = 3, delay: float = 10.0) ->
     """Probe with benefit-of-the-doubt retries (storefront lags ingest).
 
     Steam's storefront can take several seconds after RTMP connect before
-    is_online flips true. Wait `delay` seconds between attempts so fresh
-    streams aren't falsely flagged offline.
+    is_online flips true (getbroadcastmpd may omit hls_url for ~5-40s).
+    The first probe runs immediately (no pre-sleep), then waits `delay`
+    seconds between retries so fresh streams aren't falsely flagged
+    offline. Keys that fail to parse are never retried — they cannot
+    become valid by waiting.
     """
     last = probe_stream(rtmp_key)
+    if last.get("steamid") is None:
+        return last  # invalid key format — permanent, retrying can't help
     for _ in range(max(0, attempts - 1)):
         if last.get("online"):
             return last

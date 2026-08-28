@@ -97,7 +97,7 @@ def attach():
                     spid = s.get("pid")
                     started = s.get("started_at", "")[11:19] if s.get("started_at") else ""
 
-                    st_icon = "🟢" if st == "LIVE" else ("🔴" if st == "DEAD" else "⚪")
+                    st_icon = "🟢" if st == "LIVE" else ("🟡" if st == "PUSHED" else ("🔴" if st == "DEAD" else "⚪"))
                     st_display = f"{st_icon} {st}"
 
                     pid_str = str(spid) if spid else "-"
