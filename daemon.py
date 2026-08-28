@@ -194,7 +194,6 @@ class DaemonManager:
             # Load config
             games = self.config.get("games", [])
             restart_every = self.config.get("restart_every_hours", 4)
-            duration = self.config.get("duration_hours", 0)
 
             if not games:
                 logger.warning("No games configured — daemon starting idle.")
@@ -215,11 +214,10 @@ class DaemonManager:
                 return
 
             logger.info(
-                "Starting %d streams, auto-restart every %dh%s",
+                "Starting %d streams, auto-restart every %dh",
                 len(games), restart_every,
-                f", stop after {duration}h" if duration else "",
             )
-            self._run_engine(games, restart_every, duration)
+            self._run_engine(games, restart_every)
             return
 
         # ── First fork ──
@@ -270,7 +268,6 @@ class DaemonManager:
         # Load config: which games to stream, auto-restart interval
         games = self.config.get("games", [])
         restart_every = self.config.get("restart_every_hours", 4)
-        duration = self.config.get("duration_hours", 0)
 
         if not games:
             logger.warning("No games configured — daemon starting idle. Add games to SteamCast TUI Setup (option 3).")
@@ -291,28 +288,33 @@ class DaemonManager:
             return
 
         logger.info(
-            "Starting %d streams, auto-restart every %dh%s",
+            "Starting %d streams, auto-restart every %dh",
             len(games), restart_every,
-            f", stop after {duration}h" if duration else "",
         )
 
         # ── Run the headless stream engine ──
-        self._run_engine(games, restart_every, duration)
+        self._run_engine(games, restart_every)
 
     def stop(self):
         """Stop the daemon gracefully."""
         pid = read_pid()
         if not pid:
+            # Idempotent success in systemd-executed contexts (ExecStop,
+            # schedule stop-trigger): a missing PID file is normal there —
+            # the daemon already exited (or never ran under this service).
+            if os.environ.get("INVOCATION_ID"):
+                logger.info("No PID file (systemd context) — nothing to stop.")
+                print("✅ Daemon already stopped (no PID file).")
+                return
             # Before giving up, try systemctl if service is installed
-            # (skip if called from systemd ExecStop to avoid recursion)
             unit_path = "/etc/systemd/system/steamcast.service"
-            if os.path.exists(unit_path) and not os.environ.get("INVOCATION_ID"):
+            if os.path.exists(unit_path):
                 logger.info("No PID file — trying systemctl stop instead.")
                 try:
                     subprocess.run(["sudo", "systemctl", "stop", "steamcast"], check=True)
                     print("✅ System service stopped via systemctl.")
                     return
-                except subprocess.CalledProcessError as e:
+                except subprocess.CalledProcessError:
                     pass  # fall through to error below
             raise DaemonError("No PID file found. Daemon is not running.")
 
@@ -462,7 +464,7 @@ class DaemonManager:
         while self._running:
             time.sleep(5)
 
-    def _run_engine(self, games: list[dict], restart_every: int, duration_hours: int):
+    def _run_engine(self, games: list[dict], restart_every: int):
         """Headless stream engine — extracted from run_cast_stream logic."""
         self._running = True
 
@@ -475,9 +477,9 @@ class DaemonManager:
             logger.error("ffmpeg not found. Cannot start streaming.")
             return
 
-        # Determine end time for duration-based stop
+        # Determine end time: absolute schedule end (schedule.json) if set.
+        # No duration-based stop — the schedule file is the only source of truth.
         start_time = datetime.now()
-        end_at = start_time + timedelta(hours=duration_hours) if duration_hours > 0 else None
         next_restart_at = start_time + timedelta(hours=restart_every) if restart_every > 0 else None
 
         if next_restart_at:
@@ -532,10 +534,12 @@ class DaemonManager:
         while self._running:
             now = datetime.now()
 
-            # Check duration limit
-            if end_at and now >= end_at:
-                logger.info("Duration limit reached (%dh). Stopping all streams.", duration_hours)
-                self._stop_all_streams("duration_limit")
+            # Check absolute schedule end (schedule.json — re-read each tick)
+            sched_end = _read_schedule_end()
+            if sched_end and now >= sched_end:
+                logger.info("Schedule end reached (%s). Stopping all streams.",
+                            sched_end.strftime("%Y-%m-%d %H:%M"))
+                self._stop_all_streams("schedule_end")
                 break
 
             # Check auto-restart
@@ -756,6 +760,21 @@ def cmd_status() -> dict:
     return mgr.status()
 
 
+def _read_schedule_end():
+    """Read absolute schedule end from ~/.steamcast/schedule.json (or None)."""
+    sched_path = Path.home() / ".steamcast" / "schedule.json"
+    try:
+        if not sched_path.exists():
+            return None
+        data = json.loads(sched_path.read_text())
+        end_str = data.get("end")
+        if not end_str:
+            return None
+        return datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
 def load_config() -> dict:
     """Load daemon config, merging TUI config with daemon overrides.
 
@@ -766,7 +785,7 @@ def load_config() -> dict:
     Auto-discovers video files from ~/projects/steamcast/output/<name>.mp4.
     Only active games from the TUI config are included.
     """
-    config: dict = {"games": [], "restart_every_hours": 4, "duration_hours": 0}
+    config: dict = {"games": [], "restart_every_hours": 4}
 
     # 1. Load TUI config
     tui_cfg_path = Path.home() / "projects" / "steamcast" / "config.json"
@@ -784,7 +803,6 @@ def load_config() -> dict:
         try:
             dm_cfg = json.loads(daemon_cfg_path.read_text())
             config["restart_every_hours"] = dm_cfg.get("restart_every_hours", 4)
-            config["duration_hours"] = dm_cfg.get("duration_hours", 0)
         except (json.JSONDecodeError, OSError):
             pass
 

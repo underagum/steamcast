@@ -2818,19 +2818,37 @@ def _unified_start(has_service: bool):
 
     if has_service:
         print("Starting SteamCast daemon via systemd...")
+        sched = _read_schedule()
+        armed = bool(sched.get("start") or sched.get("end"))
+        if sched.get("end"):
+            print(f"   ⏰ Schedule armed — will auto-stop at {sched['end']}")
         try:
-            subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast"], check=True)
+            if armed:
+                # Edge #5: schedule armed → start ONLY, never enable. The
+                # timers/triggers own the window and the service must stay
+                # boot-neutral (an enabled service would auto-start on reboot
+                # even after the window has ended).
+                print("   ⚠ Schedule armed — NOT enabling boot start (timers control the window).")
+                subprocess.run(["sudo", "systemctl", "start", "steamcast"], check=True)
+            else:
+                subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast"], check=True)
             # systemctl returns before daemon is fully ready — wait for PID
             for _ in range(10):
                 if read_pid():
                     break
                 time.sleep(0.5)
-            print("🔵 Daemon started + enabled (survives reboot).")
+            if armed:
+                print("🔵 Daemon started (schedule window governs stop).")
+            else:
+                print("🔵 Daemon started + enabled (survives reboot).")
         except subprocess.CalledProcessError as e:
             print(f"❌ systemctl failed: {e}")
     else:
         config = load_config()
         print("Starting SteamCast daemon...")
+        sched = _read_schedule()
+        if sched.get("end"):
+            print(f"   ⏰ Schedule armed — will auto-stop at {sched['end']}")
         try:
             cmd_start(config)
         except DaemonError as e:
@@ -2903,6 +2921,32 @@ def _cmd_daemon():
         else:
             _unified_start(has_service)
     elif sub == "stop":
+        # Stop with a time: steamcast daemon stop "YYYYMMDD HH:MM" → schedule stop-only
+        time_args = [a for a in sys.argv[3:] if not a.startswith("-")]
+        if len(time_args) == 1 and " " in time_args[0]:
+            # Quoted form: stop "20260815 18:00" arrives as a single arg
+            try:
+                stop_dt = datetime.strptime(time_args[0], "%Y%m%d %H:%M")
+            except ValueError:
+                print("❌ Invalid datetime format. Expected YYYYMMDD HH:MM")
+                return
+            print(f"📅 Scheduling stop at {stop_dt.strftime('%Y-%m-%d %H:%M')}...")
+            _do_schedule(end_dt=stop_dt)
+            return
+        if len(time_args) >= 2:
+            try:
+                stop_dt = datetime.strptime(f"{time_args[0]} {time_args[1]}", "%Y%m%d %H:%M")
+            except ValueError:
+                print("❌ Invalid datetime format. Expected YYYYMMDD HH:MM")
+                return
+            print(f"📅 Scheduling stop at {stop_dt.strftime('%Y-%m-%d %H:%M')}...")
+            _do_schedule(end_dt=stop_dt)
+            return
+        if time_args:
+            # Non-empty but unparseable — NEVER fall through to a real stop
+            print("❌ Invalid datetime format. Expected YYYYMMDD HH:MM")
+            print("   (to stop the daemon now, use: steamcast daemon stop)")
+            return
         _unified_stop(has_service)
     elif sub == "status":
         st = cmd_status()
@@ -2947,16 +2991,23 @@ def _schedule_menu():
 
     banner()
     console.print("[bold yellow]=== SCHEDULE BROADCAST ===[/]\n")
-    console.print("[dim]Set a start and end datetime. The daemon will[/]")
-    console.print("[dim]start automatically via systemd timer.[/]")
+    console.print("[dim]Set an absolute start + end. systemd timers handle[/]")
+    console.print("[dim]both moments — no duration drift, survives reboot.[/]")
     console.print()
 
     # Show current schedule
-    timer_path = "/etc/systemd/system/steamcast.timer"
-    if os.path.exists(timer_path):
+    sched = _read_schedule()
+    if sched:
         console.print("[green]📅 Schedule active:[/]")
-        subprocess.run(["systemctl", "list-timers", "steamcast.timer", "--no-pager"],
-                      check=False)
+        if sched.get("start"):
+            console.print(f"   Start:  {sched['start']}")
+        else:
+            console.print(f"   Start:  (manual start — no start timer)")
+        console.print(f"   End:    {sched.get('end', '(not set — runs until stopped)')}")
+        console.print()
+        subprocess.run(["systemctl", "list-timers",
+                        "steamcast-schedule-start.timer", "steamcast-schedule-stop.timer",
+                        "--no-pager"], check=False)
         console.print()
         if Confirm.ask("[yellow]Clear current schedule?[/]", default=False):
             _do_schedule(clear=True)
@@ -2969,122 +3020,475 @@ def _schedule_menu():
     console.print()
 
     now = datetime.now().replace(microsecond=0)
-    start_str = Prompt.ask("[cyan]Start[/]").strip()
-    try:
-        start_dt = datetime.strptime(start_str, "%Y%m%d %H:%M")
-    except ValueError:
-        console.print("[red]Invalid format. Expected YYYYMMDD HH:MM[/]")
-        return
-    if start_dt <= now:
-        console.print("[red]Start must be in the future.[/]")
-        return
+    start_str = Prompt.ask("[cyan]Start (or 'x' for stop-only)[/]").strip()
+    start_dt = None
+    if start_str.lower() != "x":
+        try:
+            start_dt = datetime.strptime(start_str, "%Y%m%d %H:%M")
+        except ValueError:
+            console.print("[red]Invalid format. Expected YYYYMMDD HH:MM[/]")
+            return
+        if start_dt <= now:
+            console.print("[red]Start must be in the future.[/]")
+            return
 
-    end_str = Prompt.ask("[cyan]End[/]").strip()
-    try:
-        end_dt = datetime.strptime(end_str, "%Y%m%d %H:%M")
-    except ValueError:
-        console.print("[red]Invalid format. Expected YYYYMMDD HH:MM[/]")
-        return
-    if end_dt <= start_dt:
-        console.print("[red]End must be after start.[/]")
+    end_str = Prompt.ask("[cyan]End (or 'x' for start-only)[/]").strip()
+    end_dt = None
+    if end_str.lower() != "x":
+        try:
+            end_dt = datetime.strptime(end_str, "%Y%m%d %H:%M")
+        except ValueError:
+            console.print("[red]Invalid format. Expected YYYYMMDD HH:MM[/]")
+            return
+        if end_dt <= now:
+            console.print("[red]End must be in the future.[/]")
+            return
+        if start_dt is not None and end_dt <= start_dt:
+            console.print("[red]End must be after start.[/]")
+            return
+
+    if start_dt is None and end_dt is None:
+        console.print("[yellow]Nothing to schedule ('x' for both).[/]")
         return
 
     _do_schedule(start_dt=start_dt, end_dt=end_dt)
 
 
-def _do_schedule(start_dt=None, end_dt=None, clear=False):
-    """Core schedule logic — shared by CLI and TUI."""
-    timer_path = "/etc/systemd/system/steamcast.timer"
-    cfg_path = os.path.expanduser("~/.steamcast/config.json")
-    _ensure_schedule_dir()
+# ── Absolute schedule (dual-timer) ──
+SCHED_FILE = os.path.expanduser("~/.steamcast/schedule.json")
+TIMER_START = "/etc/systemd/system/steamcast-schedule-start.timer"
+SVC_START = "/etc/systemd/system/steamcast-schedule-start.service"
+TIMER_STOP = "/etc/systemd/system/steamcast-schedule-stop.timer"
+SVC_STOP = "/etc/systemd/system/steamcast-schedule-stop.service"
+SUDOERS_FILE = "/etc/sudoers.d/steamcast-schedule"
 
-    if clear:
-        if os.path.exists(timer_path):
-            subprocess.run(["sudo", "systemctl", "stop", "steamcast.timer"], check=False)
-            subprocess.run(["sudo", "systemctl", "disable", "steamcast.timer"], check=False)
-            subprocess.run(["sudo", "rm", timer_path], check=True)
-            subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
-            print("📅 Schedule cleared.")
-            print("   Re-enable auto-start: sudo systemctl enable steamcast")
-        else:
-            print("📅 No schedule to clear.")
-        return
 
-    duration_h = round((end_dt - start_dt).total_seconds() / 3600, 1)
-
-    # Write duration to daemon config
+def _read_schedule() -> dict:
+    """Read schedule.json ({} if missing/invalid)."""
     try:
-        cfg = json.loads(open(cfg_path).read()) if os.path.exists(cfg_path) else {}
+        if os.path.exists(SCHED_FILE):
+            return json.loads(open(SCHED_FILE).read())
     except Exception:
-        cfg = {}
-    cfg["duration_hours"] = duration_h
-    with open(cfg_path, "w") as f:
-        json.dump(cfg, f, indent=2)
+        pass
+    return {}
 
-    timer_unit = f"""[Unit]
-Description=SteamCast scheduled broadcast
+
+def _ensure_schedule_sudoers():
+    """Install scoped NOPASSWD sudoers for steamcast schedule triggers.
+
+    The oneshot services run outside a TTY (systemd context) — they
+    cannot prompt for a password. Scope is limited to the exact
+    systemctl/rm commands the triggers run. The file is validated
+    with `visudo -cf` before it replaces any existing file.
+    """
+    user = os.environ.get("USER") or os.environ.get("LOGNAME")
+    if not user or user == "root":
+        print("⚠ Cannot determine a non-root username — skipping sudoers install.")
+        return
+    lines = [
+        f"Defaults:{user} env_keep += HOME",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl start steamcast.service",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl stop steamcast.service",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl enable --now steamcast-schedule-start.timer",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl stop steamcast-schedule-start.timer",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl disable steamcast-schedule-start.timer",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl stop steamcast-schedule-start.service",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl disable steamcast-schedule-start.service",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl enable --now steamcast-schedule-stop.timer",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl stop steamcast-schedule-stop.timer",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl disable steamcast-schedule-stop.timer",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl stop steamcast-schedule-stop.service",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl disable steamcast-schedule-stop.service",
+        f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload",
+        f"{user} ALL=(root) NOPASSWD: /bin/rm -f /etc/systemd/system/steamcast-schedule-start.timer",
+        f"{user} ALL=(root) NOPASSWD: /bin/rm -f /etc/systemd/system/steamcast-schedule-start.service",
+        f"{user} ALL=(root) NOPASSWD: /bin/rm -f /etc/systemd/system/steamcast-schedule-stop.timer",
+        f"{user} ALL=(root) NOPASSWD: /bin/rm -f /etc/systemd/system/steamcast-schedule-stop.service",
+    ]
+    content = "\n".join(lines) + "\n"
+    tmp = SUDOERS_FILE + ".tmp"
+    subprocess.run(["sudo", "tee", tmp], input=content, text=True, check=True)
+    try:
+        subprocess.run(["sudo", "visudo", "-cf", tmp], check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        subprocess.run(["sudo", "rm", "-f", tmp], check=False)
+        print(f"❌ sudoers validation failed — NOT installed:\n   {e.stderr.strip() or e}")
+        raise
+    subprocess.run(["sudo", "mv", tmp, SUDOERS_FILE], check=True)
+    subprocess.run(["sudo", "chmod", "440", SUDOERS_FILE], check=True)
+
+
+def _schedule_units(schedule: dict) -> list[tuple[str, str]]:
+    """Build (path, content) pairs for the schedule unit files."""
+    launcher = shutil.which("steamcast") or os.path.expanduser("~/.local/bin/steamcast")
+    if not os.path.exists(launcher):
+        launcher = "/usr/local/bin/steamcast"
+    user = os.environ.get("USER") or os.environ.get("LOGNAME", "root")
+    units = []
+
+    start_str = schedule.get("start")
+    end_str = schedule.get("end")
+
+    if start_str:
+        units.append((TIMER_START, f"""[Unit]
+Description=SteamCast scheduled broadcast start
 
 [Timer]
-OnCalendar={start_dt.strftime('%Y-%m-%d %H:%M:%S')}
+OnCalendar={start_str}
+Persistent=true
 
 [Install]
 WantedBy=timers.target
-"""
+"""))
+        units.append((SVC_START, f"""[Unit]
+Description=SteamCast scheduled broadcast start trigger
+After=network-online.target
+
+[Service]
+Type=oneshot
+User={user}
+ExecStart={launcher} daemon schedule --start-trigger
+"""))
+
+    if end_str:
+        units.append((TIMER_STOP, f"""[Unit]
+Description=SteamCast scheduled broadcast stop
+
+[Timer]
+OnCalendar={end_str}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"""))
+        units.append((SVC_STOP, f"""[Unit]
+Description=SteamCast scheduled broadcast stop trigger
+
+[Service]
+Type=oneshot
+User={user}
+ExecStart={launcher} daemon schedule --stop-trigger
+"""))
+
+    return units
+
+
+def _clear_schedule_units():
+    """Stop, disable, and remove both schedule timers + services (idempotent)."""
+    for path in (TIMER_START, SVC_START, TIMER_STOP, SVC_STOP):
+        # Full unit name WITH suffix — must match the sudoers rules exactly
+        name = os.path.basename(path)
+        if os.path.exists(path):
+            subprocess.run(["sudo", "systemctl", "stop", name], check=False)
+            subprocess.run(["sudo", "systemctl", "disable", name], check=False)
+            subprocess.run(["sudo", "rm", "-f", path], check=True)
+    subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
+
+
+def _do_schedule(start_dt=None, end_dt=None, clear=False):
+    """Core schedule logic — shared by CLI and TUI.
+
+    Absolute dual-timer design:
+      start-timer → start-trigger service → checks window → systemctl start steamcast
+      stop-timer  → stop-trigger service  → systemctl stop steamcast + cleanup
+
+    schedule.json is the single source of truth (start/end absolute).
+    duration_hours is NOT used — daemon self-stops by re-reading
+    schedule.json in its monitor loop.
+
+    Commands compose (merge into schedule.json):
+      schedule "T"             → arm START (keep existing end, if any)
+      stop "T"                 → arm STOP  (keep existing start, if any)
+      schedule "T1" "T2"       → arm BOTH
+    """
+    _ensure_schedule_dir()
+
+    if clear:
+        _clear_schedule_units()
+        if os.path.exists(SCHED_FILE):
+            os.remove(SCHED_FILE)
+        print("📅 Schedule cleared.")
+        print("   Daemon now runs until manually stopped.")
+        return
+
+    if start_dt is None and end_dt is None:
+        print("❌ No datetime provided.")
+        return
+
+    # Previous schedule (kept for rollback — a failed set must not destroy it)
+    prev = _read_schedule()
+
+    # Merge with any existing schedule (composable commands)
+    schedule = _read_schedule()
+    if not schedule:
+        schedule = {"created": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    if start_dt is not None:
+        schedule["start"] = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+    if end_dt is not None:
+        schedule["end"] = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    now = datetime.now()
+
+    # Validate the times the user actually supplied — new intent must be future
+    if start_dt is not None and start_dt <= now:
+        print("❌ Start time must be in the future.")
+        return
+    if end_dt is not None and end_dt <= now:
+        print("❌ End time must be in the future.")
+        return
+
+    # Defensively re-parse the merged schedule. Pre-existing fields may be
+    # stale or corrupt — never let a bad schedule.json crash the command.
+    def _parse_field(field):
+        val = schedule.get(field)
+        if not val:
+            return None
+        try:
+            return datetime.strptime(val, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            print(f"⚠ Existing schedule {field} '{val}' is invalid — dropping it.")
+            schedule.pop(field, None)
+            return None
+
+    eff_start = _parse_field("start")
+    eff_end = _parse_field("end")
+
+    # Drop stale fields from an earlier schedule that has already lapsed —
+    # keeps composable commands working (e.g. adding a stop to a start-only
+    # window whose start already fired, or re-arming after a missed window).
+    if eff_start and eff_start <= now:
+        print(f"ℹ Existing start {eff_start:%Y-%m-%d %H:%M} already passed — start timer not re-armed.")
+        schedule.pop("start", None)
+        eff_start = None
+    if eff_end and eff_end <= now:
+        print(f"ℹ Existing end {eff_end:%Y-%m-%d %H:%M} already passed — dropping it.")
+        schedule.pop("end", None)
+        eff_end = None
+
+    if eff_start and eff_end and eff_end <= eff_start:
+        print("❌ End must be after start.")
+        return
+
+    if not schedule.get("start") and not schedule.get("end"):
+        print("❌ Nothing left to schedule (both times invalid/lapsed). Use --clear to reset.")
+        return
 
     print(f"📅 Scheduling broadcast:")
-    print(f"   Start:  {start_dt.strftime('%Y-%m-%d %H:%M')}")
-    print(f"   End:    {end_dt.strftime('%Y-%m-%d %H:%M')}")
-    print(f"   Duration: {duration_h}h")
+    print(f"   Start:  {schedule.get('start', '(not set — manual start)')}")
+    print(f"   End:    {schedule.get('end', '(not set — runs until stopped)')}")
     print()
     print("🔐 sudo required for timer install.")
 
     try:
-        subprocess.run(
-            ["sudo", "tee", timer_path],
-            input=timer_unit, text=True, check=True,
-        )
+        # 1. NOPASSWD sudoers so systemd-context triggers can run
+        _ensure_schedule_sudoers()
+
+        # 2. Write unit files (only the pairs for the fields that exist)
+        for path, content in _schedule_units(schedule):
+            subprocess.run(["sudo", "tee", path], input=content, text=True, check=True)
+
+        # 3. Reload + arm timers (only the ones that exist)
         subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
-        subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast.timer"], check=True)
-        # Disable auto-start on boot — only the timer should trigger the daemon
-        subprocess.run(["sudo", "systemctl", "disable", "steamcast.service"], check=True)
+        if schedule.get("start"):
+            subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast-schedule-start.timer"], check=True)
+        if schedule.get("end"):
+            subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast-schedule-stop.timer"], check=True)
+
+        # 4. Keep main service disabled — timers/triggers control the window
+        if os.path.exists("/etc/systemd/system/steamcast.service"):
+            subprocess.run(["sudo", "systemctl", "disable", "steamcast.service"], check=True)
+        else:
+            print("   ⚠ No steamcast.service installed — start-trigger needs it;")
+            print("     run 'steamcast daemon service install' for full window support.")
+
+        # 5. Write schedule.json LAST — the source of truth is only updated
+        #    once everything is armed, so a failed set never leaves a
+        #    misleading file (and a trigger firing in the gap finds no file).
+        with open(SCHED_FILE, "w") as f:
+            json.dump(schedule, f, indent=2)
+
         print()
         print("✅ Schedule set!")
-        print(f"   Check:   systemctl list-timers steamcast.timer")
+        print(f"   Check:   steamcast daemon schedule")
         print(f"   Clear:   steamcast daemon schedule --clear")
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, OSError) as e:
         print(f"❌ Failed: {e}")
+        print("   Rolling back...")
+        try:
+            _clear_schedule_units()
+        except Exception:
+            pass
+        # schedule.json is only written at the very end, so a failed set never
+        # touched the previous file — re-arm its timers so an already-armed
+        # window keeps working.
+        if prev.get("start") or prev.get("end"):
+            try:
+                for path, content in _schedule_units(prev):
+                    subprocess.run(["sudo", "tee", path], input=content, text=True, check=True)
+                subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+                if prev.get("start"):
+                    subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast-schedule-start.timer"], check=True)
+                if prev.get("end"):
+                    subprocess.run(["sudo", "systemctl", "enable", "--now", "steamcast-schedule-stop.timer"], check=True)
+                print("   ✅ Previous schedule re-armed.")
+            except Exception:
+                print("   ⚠ Could not re-arm previous schedule timers — run 'steamcast daemon schedule --clear' to tidy.")
+        else:
+            print("   No previous schedule to restore.")
+
+
+def _schedule_start_trigger():
+    """Run by steamcast-schedule-start.service (oneshot).
+
+    Window check: only start if start <= now < end. Prevents
+    out-of-window starts (leak-proof after reboot).
+    """
+    sched = _read_schedule()
+    if not sched:
+        print("⚠ No schedule.json — stale start timer, aborting.")
+        return
+    now = datetime.now()
+    start_str = sched.get("start")
+    end_str = sched.get("end")
+    try:
+        start_dt = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S") if start_str else None
+        end_dt = datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S") if end_str else None
+    except ValueError:
+        print("⚠ schedule.json invalid — start trigger aborted.")
+        return
+
+    if start_dt and now < start_dt:
+        print(f"⏳ Too early (start {start_dt}). Skipping.")
+        return
+    if end_dt and now >= end_dt:
+        print("⌛ Window already ended. Skipping start.")
+        return
+
+    print("🎬 Schedule window open — starting daemon...")
+    res = subprocess.run(["sudo", "systemctl", "start", "steamcast.service"],
+                         capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"❌ systemctl start failed: {(res.stderr or res.stdout).strip()}")
+        sys.exit(1)
+
+
+def _schedule_stop_trigger():
+    """Run by steamcast-schedule-stop.service (oneshot).
+
+    Stops the daemon if alive, then self-cleans: removes timers,
+    services, and schedule.json → pristine state.
+    """
+    sched = _read_schedule()
+    if not sched:
+        # Design 2.4: missing schedule.json → nothing to do (already cleaned)
+        print("⚠ No schedule.json — stale stop timer, nothing to clean.")
+        return
+
+    # Stale-trigger guard: schedule was replaced after this timer armed
+    # (end moved later) — a racing cleanup must not kill the new window.
+    end_str = sched.get("end")
+    try:
+        end_dt = datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S") if end_str else None
+    except ValueError:
+        print("⚠ schedule.json invalid — stop trigger aborted.")
+        return
+    if end_dt and datetime.now() < end_dt:
+        print(f"⏳ Too early (end {end_dt}). Skipping.")
+        return
+
+    print("🛑 Schedule end reached — stopping daemon...")
+    if os.path.exists("/etc/systemd/system/steamcast.service"):
+        res = subprocess.run(["sudo", "systemctl", "stop", "steamcast.service"],
+                             capture_output=True, text=True)
+        if res.returncode != 0:
+            print(f"❌ systemctl stop failed: {(res.stderr or res.stdout).strip()}")
+    else:
+        print("   (no systemd service — daemon self-stops via schedule.json monitor loop)")
+    try:
+        _clear_schedule_units()
+    except Exception as e:
+        print(f"⚠ Cleanup partial: {e}")
+        sys.exit(1)
+    if os.path.exists(SCHED_FILE):
+        os.remove(SCHED_FILE)
+    print("📅 Schedule complete — timers removed, daemon stopped.")
 
 
 def _cmd_schedule():
     """CLI entry point for daemon schedule (parses sys.argv)."""
-    timer_path = "/etc/systemd/system/steamcast.timer"
-    cfg_path = os.path.expanduser("~/.steamcast/config.json")
-
     args = sys.argv[3:] if len(sys.argv) > 3 else []
 
+    # Internal triggers (called by systemd oneshot services)
+    if args and args[0] == "--start-trigger":
+        _schedule_start_trigger()
+        return
+    if args and args[0] == "--stop-trigger":
+        _schedule_stop_trigger()
+        return
+
     if not args:
-        if os.path.exists(timer_path):
+        sched = _read_schedule()
+        if sched:
             print("📅 Scheduled broadcast:")
-            subprocess.run(["systemctl", "list-timers", "steamcast.timer", "--no-pager"],
-                          check=False)
-            try:
-                cfg = json.loads(open(cfg_path).read()) if os.path.exists(cfg_path) else {}
-                dur = cfg.get("duration_hours", 0)
-                if dur:
-                    print(f"   Duration: {dur}h")
-            except Exception:
-                pass
+            if sched.get("start"):
+                print(f"   Start:  {sched['start']}")
+            else:
+                print(f"   Start:  (manual start — no start timer)")
+            print(f"   End:    {sched.get('end', '(not set — runs until stopped)')}")
+            print()
+            subprocess.run(["systemctl", "list-timers",
+                            "steamcast-schedule-start.timer", "steamcast-schedule-stop.timer",
+                            "--no-pager"], check=False)
         else:
             print("📅 No schedule set.")
-            print("   Usage: steamcast daemon schedule \"20260815 09:00\" \"20260815 18:00\"")
+            print("   Usage: steamcast daemon schedule \"20260815 09:00\"              (start-only)")
+            print("          steamcast daemon schedule \"20260815 09:00\" \"20260815 18:00\"  (full window)")
+            print("          steamcast daemon stop \"20260815 18:00\"                   (stop-only)")
         return
 
     if len(args) == 1 and args[0] == "--clear":
         _do_schedule(clear=True)
         return
 
+    # ── Start-only: steamcast daemon schedule "YYYYMMDD HH:MM" ──
+    # The shell may pass it as one quoted arg ("20260815 09:00")
+    # or two bare args (20260815 09:00) — accept both.
+    if len(args) == 2 and " " not in args[0]:
+        try:
+            start_dt = datetime.strptime(f"{args[0]} {args[1]}", "%Y%m%d %H:%M")
+        except ValueError:
+            print("❌ Invalid datetime format. Expected YYYYMMDD HH:MM")
+            return
+        _do_schedule(start_dt=start_dt)
+        return
+    if len(args) == 1 and " " in args[0]:
+        try:
+            start_dt = datetime.strptime(args[0], "%Y%m%d %H:%M")
+        except ValueError:
+            print("❌ Invalid datetime format. Expected YYYYMMDD HH:MM")
+            return
+        _do_schedule(start_dt=start_dt)
+        return
+
+    # ── Full window: steamcast daemon schedule "START" "END" ──
+    # Quoted form arrives as 2 args, bare form as 4.
+    if len(args) == 2 and " " in args[0]:
+        try:
+            start_dt = datetime.strptime(args[0], "%Y%m%d %H:%M")
+            end_dt = datetime.strptime(args[1], "%Y%m%d %H:%M")
+        except ValueError:
+            print("❌ Invalid datetime format. Expected YYYYMMDD HH:MM")
+            return
+        if end_dt <= start_dt:
+            print("❌ End must be after start.")
+            return
+        _do_schedule(start_dt=start_dt, end_dt=end_dt)
+        return
+
     if len(args) != 4:
-        print("❌ Usage: steamcast daemon schedule \"YYYYMMDD HH:MM\" \"YYYYMMDD HH:MM\"")
+        print("❌ Usage: steamcast daemon schedule \"YYYYMMDD HH:MM\"            (start-only)")
+        print("          steamcast daemon schedule \"YYYYMMDD HH:MM\" \"YYYYMMDD HH:MM\"  (full window)")
+        print("          steamcast daemon stop \"YYYYMMDD HH:MM\"                (stop-only)")
         return
 
     start_str = f"{args[0]} {args[1]}"
