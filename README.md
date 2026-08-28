@@ -15,6 +15,8 @@ Two simple phases:
 | **PREP** | Converts your videos to Steam's broadcast spec (H.264, AAC, 1080p30, 5 Mbps CBR). Merges multi-part videos per game. One clean `.mp4` per title, ready to go. |
 | **CAST** | Pick which games to broadcast, toggle them on/off, and start streaming immediately. A live dashboard shows per-stream CPU%, memory (RSS), and real-time bitrate. Scheduling runs in the headless daemon (Daemon Manager `[5]`). |
 
+**Storefront-verified states (v2.0.0+):** every stream reports `PUSHED` while ffmpeg transmits, and flips to `LIVE` only once Steam's anonymous broadcast API confirms the stream is actually visible on your store page — with the real resolution/bitrate Steam is serving. No more guessing "is it actually up?"
+
 ---
 
 ## Quick Start
@@ -148,6 +150,8 @@ steamcast daemon start
 # One-shot status check
 steamcast daemon status
 # 🔵 Daemon is running (PID 3124, uptime 2:14:33)
+#   Game      State      Bitrate    Storefront
+#   JRDD      🟢 LIVE    5000k      ✅ 1920x1080 · 5006k
 
 # Live read-only dashboard — Ctrl+C to detach, daemon keeps running
 steamcast daemon attach
@@ -191,6 +195,35 @@ In the TUI, Daemon Manager shows whether the system service is installed and off
 ```
 
 > 💡 **Tip:** The daemon detaches completely from your terminal. Start it from any SSH session — it keeps running after you disconnect. Run `steamcast daemon attach` to check in anytime. For 24/7 uptime, install the systemd service once and forget about it.
+
+---
+
+## Storefront Liveness (v2.0.0+)
+
+SteamCast no longer trusts "ffmpeg is running" as proof of liveness. Every stream has two states:
+
+| State | Meaning |
+|---|---|
+| 🟡 **PUSHED** | ffmpeg is transmitting to Steam's RTMP ingest — the stream *should* appear. |
+| 🟢 **LIVE** | Steam's own broadcast API confirms the stream is **visible on your storefront**, serving a real HLS manifest with resolution/bitrate. |
+| 🔴 **DEAD** | The ffmpeg process exited and could not be restarted. |
+
+**How the check works (no browser, no login, no thumbnails):** SteamCast derives your broadcaster ID straight from your RTMP key (`steam_<accountid>_<hash>`), then asks Steam's anonymous broadcast API whether that broadcast is online and pulls the live HLS manifest it's serving. If Steam says it's visible and serves a manifest, it's `LIVE` — with the actual specs (`✅ 1920x1080 · 5006k`).
+
+**It keeps watching, not just at launch.** A background verifier re-probes every 30 seconds for the daemon's whole lifetime:
+- Fresh/reconnected streams get a 3 × 10 s benefit-of-the-doubt window (Steam takes ~5–40 s to register a new ingest on the storefront)
+- If a `LIVE` stream stops being visible on the storefront, it drops back to `PUSHED` with a log line
+- Transient probe errors (timeouts, rate limits) never flip your status — only clean answers do
+
+```bash
+steamcast daemon status
+# Game                      State      Bitrate    Storefront
+# JRDD                      🟢 LIVE    5000k      ✅ 1920x1080 · 5006k
+# dreadout 2                🟢 LIVE    5000k      ✅ 1920x1080 · 5008k
+# 2 LIVE · 0 PUSHED (of 2)
+```
+
+The same state is exposed in the HTTP API (`GET :6789/status` → per-stream `storefront` object) and `~/.steamcast/state.json`. When creating a game profile, Setup asks for the **Steam AppID** (used to label the probe results).
 
 ---
 
