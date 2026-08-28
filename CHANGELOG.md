@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **CAST scheduling removed.** The interactive CAST menu no longer offers `[SCH]` delayed-start / auto-stop broadcasts — the start/end datetime prompts, pre-start countdown, and monitor-loop auto-stop were removed from `run_cast_stream()`. CAST now always starts immediately; the `restart_every_hours` auto-restart (default 4h) is unchanged. Scheduling lives exclusively in the headless daemon (`steamcast daemon schedule` / Daemon Manager `[5]`), which owns absolute start/end via systemd timers.
+
 ## v1.6.2 — 2026-08-03
 
 ### Added

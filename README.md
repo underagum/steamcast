@@ -13,7 +13,7 @@ Two simple phases:
 | Phase | What happens |
 |---|---|
 | **PREP** | Converts your videos to Steam's broadcast spec (H.264, AAC, 1080p30, 5 Mbps CBR). Merges multi-part videos per game. One clean `.mp4` per title, ready to go. |
-| **CAST** | Pick which games to broadcast, toggle them on/off, and start streaming. Either right now or on a schedule. A live dashboard shows per-stream CPU%, memory (RSS), and real-time bitrate. |
+| **CAST** | Pick which games to broadcast, toggle them on/off, and start streaming immediately. A live dashboard shows per-stream CPU%, memory (RSS), and real-time bitrate. Scheduling runs in the headless daemon (Daemon Manager `[5]`). |
 
 ---
 
@@ -67,7 +67,7 @@ Pick **Setup** (or `python steamcast.py setup`). Paste the RTMP key from [Steamw
 
 ### 5. Go live
 
-Pick **CAST** (or `python steamcast.py cast`). Toggle games on/off, then hit **S** to start now or **SCH** to schedule (e.g., `20260715 09:00` to `20260715 18:00`). Ctrl+C cancels anytime.
+Pick **CAST** (or `python steamcast.py cast`). Toggle games on/off, then hit **S** to start now (optionally with an auto-restart every N hours). Ctrl+C cancels anytime. To schedule a broadcast for later, use the headless daemon: Daemon Manager **[5] Schedule broadcast** (or `steamcast daemon schedule "START" "END"`).
 
 ---
 
@@ -258,7 +258,7 @@ Your upload bandwidth is saturated. The dashboard detects this from ffmpeg's `sp
 No. Your ON/OFF choices persist in `config.json` across sessions. Use `[T]` Toggle ALL to flip everything at once.
 
 **Can I schedule a broadcast?**
-Yes. Type `SCH` in the CAST menu, give it a start and end datetime (`YYYYMMDD HH:MM`), and SteamCast handles the countdown and auto-stop. Ctrl+C cancels.
+Yes — through the headless daemon, not the CAST TUI. Daemon Manager **[5] Schedule broadcast** (or `steamcast daemon schedule "YYYYMMDD HH:MM" "YYYYMMDD HH:MM"`) arms a systemd timer that starts and stops the daemon at absolute times. The interactive CAST menu starts broadcasts immediately.
 
 **What if SteamCast crashes mid-broadcast?**
 An `atexit` handler cleans up orphaned ffmpeg processes. If that somehow fails, kill remaining `ffmpeg.exe` processes in Task Manager.
