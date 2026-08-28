@@ -1738,7 +1738,6 @@ def show_cast():
         console.print("[cyan][A][/] Add/Edit keys (Setup)")
         console.print("[cyan][P][/] Go to Prep")
         console.print("[green][S][/] Start broadcasting")
-        console.print("[cyan][SCH][/] Schedule broadcast (set start & end datetime)")
         console.print("[red][Q][/] Back to main menu")
 
         if RICH:
@@ -1812,113 +1811,6 @@ def show_cast():
 
             run_cast_stream(to_start, restart_every_hours=restart_every)
             return
-        elif choice == "sch":
-            # Scheduled broadcast
-            to_start = [m for m in menu_items if m["active"] and m["has_video"] and m["has_key"] and m["has_codec"]]
-            problems = [m for m in menu_items if m["active"] and (not m["has_video"] or not m["has_key"] or not m["has_codec"])]
-
-            if problems:
-                console.print()
-                console.print("[yellow]Some active games have issues:[/]")
-                for p in problems:
-                    if not p["has_video"]:
-                        console.print(f"  [red]  {rich_escape(p['game'])}: no video file (run Prep)[/]")
-                    elif not p["has_codec"]:
-                        console.print(f"  [red]  {rich_escape(p['game'])}: {p.get('codec_msg', 'bad codec')} (re-encode via Prep)[/]")
-                    elif not p["has_key"]:
-                        console.print(f"  [red]  {rich_escape(p['game'])}: no RTMP key (run Setup)[/]")
-                if RICH:
-                    ok = Confirm.ask("\nStart anyway (skip problematic games)?")
-                else:
-                    ok = input("\nStart anyway (y/n): ").lower().startswith("y")
-                if not ok:
-                    continue
-
-            if not to_start:
-                console.print("[yellow]No games ready to broadcast.[/]")
-                if RICH:
-                    console.input("[dim]Press Enter to continue...[/]")
-                else:
-                    input("\nPress Enter to continue...")
-                continue
-
-            # ── Schedule prompts ──
-            console.print()
-            console.print("[dim]Enter dates as YYYYMMDD HH:MM (24h).[/]")
-
-            now = datetime.now().replace(microsecond=0)
-
-            if RICH:
-                start_str = Prompt.ask("[cyan]Start[/]").strip()
-            else:
-                start_str = input("Start (YYYMMDD HH:MM): ").strip()
-
-            try:
-                start_dt = datetime.strptime(start_str, "%Y%m%d %H:%M")
-            except ValueError:
-                console.print("[red]Invalid format. Expected YYYYMMDD HH:MM[/]")
-                continue
-
-            if start_dt <= now:
-                console.print("[red]Start must be in the future.[/]")
-                continue
-
-            if RICH:
-                end_str = Prompt.ask("[cyan]End[/]").strip()
-            else:
-                end_str = input("End   (YYYMMDD HH:MM): ").strip()
-
-            try:
-                end_dt = datetime.strptime(end_str, "%Y%m%d %H:%M")
-            except ValueError:
-                console.print("[red]Invalid format. Expected YYYYMMDD HH:MM[/]")
-                continue
-
-            if end_dt <= start_dt:
-                console.print("[red]End must be after start.[/]")
-                continue
-
-            duration_hours = round((end_dt - start_dt).total_seconds() / 3600, 1)
-            delay_minutes = max(0, int((start_dt - now).total_seconds() / 60))
-
-            dur_d = int(duration_hours // 24)
-            dur_h = int(duration_hours % 24)
-            dur_m = int((duration_hours * 60) % 60)
-            parts = []
-            if dur_d > 0:
-                parts.append(f"{dur_d}d")
-            if dur_h > 0 or dur_d > 0:
-                parts.append(f"{dur_h}h")
-            if dur_m > 0:
-                parts.append(f"{dur_m}m")
-            dur_fmt = " ".join(parts) if parts else "0m"
-
-            console.print()
-            console.print(
-                f"[bold cyan]Start:[/] [white]{start_dt.strftime('%Y%m%d %H:%M')}[/]  "
-                f"[bold cyan]End:[/] [white]{end_dt.strftime('%Y%m%d %H:%M')}[/]  "
-                f"[dim]({dur_fmt})[/]"
-            )
-
-            if RICH:
-                confirm = Confirm.ask("\nProceed with scheduled broadcast?")
-            else:
-                confirm = input("\nProceed with scheduled broadcast? (y/n): ").lower().startswith("y")
-            if not confirm:
-                continue
-
-            # ── Auto-restart interval for scheduled broadcast ──
-            if RICH:
-                sch_restart_str = Prompt.ask("[magenta]Auto-restart every N hours? (0=off)[/]", default="4").strip()
-            else:
-                sch_restart_str = input("Auto-restart every N hours? (0=off, default 4): ").strip()
-            try:
-                sch_restart_every = float(sch_restart_str) if sch_restart_str else 4.0
-            except ValueError:
-                sch_restart_every = 0.0
-
-            run_cast_stream(to_start, delay_minutes=delay_minutes, duration_hours=duration_hours, restart_every_hours=sch_restart_every)
-            return
         else:
             # Try number input
             try:
@@ -1937,75 +1829,15 @@ def show_cast():
                 pass
 
 
-def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: float = 0, restart_every_hours: float = 0):
+def run_cast_stream(games: list[dict], restart_every_hours: float = 0):
     """Start streaming selected games and monitor.
 
-    If *delay_minutes* > 0, shows a countdown and waits before starting.
-    If *duration_hours* > 0, automatically stops all streams after that
-    many hours (from the time the streams actually start).
     If *restart_every_hours* > 0, automatically restarts all streams after
     that many hours (to combat ffmpeg drift)."""
     banner()
     console.print("[bold red]=== 🔴 STARTING BROADCAST ===[/]\n")
 
-    # ── Scheduling: delay before start ──
-    if delay_minutes > 0:
-        start_at = datetime.now() + timedelta(minutes=delay_minutes)
-        end_at = start_at + timedelta(hours=duration_hours) if duration_hours > 0 else None
-
-        show_sd = start_at.date() != datetime.now().date()
-        start_fmt = start_at.strftime('%Y%m%d %H:%M:%S') if show_sd else start_at.strftime('%H:%M:%S')
-
-        console.print(
-            f"[cyan]Scheduled:[/] streams will start at [white]{start_fmt}[/]"
-        )
-        if end_at:
-            show_ed = end_at.date() != start_at.date()
-            end_fmt = end_at.strftime('%Y%m%d %H:%M:%S') if show_ed else end_at.strftime('%H:%M:%S')
-            dur_d = int(duration_hours // 24)
-            dur_h = int(duration_hours % 24)
-            dur_m = int((duration_hours * 60) % 60)
-            parts = []
-            if dur_d > 0:
-                parts.append(f"{dur_d}d")
-            if dur_h > 0 or dur_d > 0:
-                parts.append(f"{dur_h}h")
-            if dur_m > 0:
-                parts.append(f"{dur_m}m")
-            dur_fmt = " ".join(parts) if parts else "0m"
-            console.print(
-                f"[cyan]           will auto-stop at [white]{end_fmt}[/] "
-                f"[dim]({dur_fmt} from start)[/]"
-            )
-        if restart_every_hours > 0:
-            rest_d = int(restart_every_hours // 24)
-            rest_h = int(restart_every_hours % 24)
-            rest_parts = []
-            if rest_d > 0:
-                rest_parts.append(f"{rest_d}d")
-            if rest_h > 0 or rest_d > 0:
-                rest_parts.append(f"{rest_h}h")
-            console.print(
-                f"[magenta]♻ auto-restarts every[/] [white]{' '.join(rest_parts)}[/]"
-            )
-        console.print()
-
-        remaining = delay_minutes * 60
-        try:
-            while remaining > 0:
-                m, s = divmod(remaining, 60)
-                if RICH:
-                    console.print(f"\r[dim]Starting in {m:02d}:{s:02d}... (Ctrl+C to cancel)[/]  ", end="")
-                else:
-                    print(f"\rStarting in {m:02d}:{s:02d}... (Ctrl+C to cancel)  ", end="", flush=True)
-                time.sleep(1)
-                remaining -= 1
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Scheduled broadcast cancelled.[/]")
-            return
-        console.print("\n[bold green]Starting now![/]\n")
-
-    if restart_every_hours > 0 and delay_minutes == 0:
+    if restart_every_hours > 0:
         rest_d = int(restart_every_hours // 24)
         rest_h = int(restart_every_hours % 24)
         rest_parts = []
@@ -2107,17 +1939,9 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
         return
 
     # Monitor loop
-    if duration_hours > 0:
-        console.print(
-            f"\n[bold red]=== 🔴 CASTING — Auto-stop at "
-            f"{datetime.now() + timedelta(hours=duration_hours):%H:%M:%S} "
-            f"(or press Enter) ===[/]"
-        )
-    else:
-        console.print("\n[bold red]=== 🔴 CASTING — Press Enter to stop all ===[/]")
+    console.print("\n[bold red]=== 🔴 CASTING — Press Enter to stop all ===[/]\n")
 
     broadcast_start = datetime.now()
-    auto_stop_at = broadcast_start + timedelta(hours=duration_hours) if duration_hours > 0 else None
 
     if not RICH:
         # Plain text monitor (non-rich)
@@ -2137,11 +1961,6 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
 
         _next_restart_at = None
         while running:
-            if auto_stop_at and datetime.now() >= auto_stop_at:
-                console.print("\n[yellow]Scheduled stop time reached.[/]")
-                running = False
-                continue
-
             # ── Auto-restart ──
             if restart_every_hours > 0:
                 if _next_restart_at is None:
@@ -2359,11 +2178,6 @@ def run_cast_stream(games: list[dict], delay_minutes: int = 0, duration_hours: f
         try:
             with Live(generate_table(), refresh_per_second=2, console=console) as live:
                 while running:
-                    if auto_stop_at and datetime.now() >= auto_stop_at:
-                        console.print("\n[yellow]Scheduled stop time reached.[/]")
-                        running = False
-                        continue
-
                     # ── Auto-restart ──
                     if restart_every_hours > 0:
                         if _next_restart_at is None:
