@@ -867,9 +867,26 @@ def get_rtmp_key(game_name: str) -> str:
 def set_rtmp_key(game_name: str, key: str):
     cfg = load_config()
     if game_name not in cfg["games"] or not isinstance(cfg["games"].get(game_name), dict):
-        cfg["games"][game_name] = {"rtmp_key": key, "active": False}
+        cfg["games"][game_name] = {"rtmp_key": key, "active": False, "appid": ""}
     else:
         cfg["games"][game_name]["rtmp_key"] = key
+    save_config(cfg)
+
+
+def get_appid(game_name: str) -> str:
+    cfg = load_config()
+    entry = cfg["games"].get(game_name, {})
+    if not isinstance(entry, dict):
+        return ""
+    return str(entry.get("appid", "") or "")
+
+
+def set_appid(game_name: str, appid: str):
+    cfg = load_config()
+    if game_name not in cfg["games"] or not isinstance(cfg["games"].get(game_name), dict):
+        cfg["games"][game_name] = {"rtmp_key": "", "active": False, "appid": appid}
+    else:
+        cfg["games"][game_name]["appid"] = appid
     save_config(cfg)
 
 
@@ -1580,6 +1597,23 @@ def show_cast_setup():
             else:
                 console.print("[yellow]No key entered — skipped.[/]")
 
+            # AppID prompt (storefront liveness probe uses it for display; key itself carries steamid)
+            current_appid = get_appid(gname)
+            if RICH:
+                appid = Prompt.ask(
+                    f"[cyan]Enter Steam AppID for '{rich_escape(gname)}'[/] (for storefront probe)",
+                    default=current_appid,
+                )
+            else:
+                appid = input(f"Enter Steam AppID for '{rich_escape(gname)}' [{current_appid}]: ").strip()
+            if appid and appid != current_appid:
+                set_appid(gname, appid)
+                console.print(f"[green]✓ AppID saved for '{rich_escape(gname)}'[/]")
+            elif appid:
+                console.print("[dim]AppID unchanged.[/]")
+            else:
+                console.print("[dim]No AppID — storefront probe will show it as unknown.[/]")
+
         elif choice == "d" and existing:
             # Delete game(s)
             console.print()
@@ -1648,6 +1682,21 @@ def show_cast_setup():
                     if new_key != current_key:
                         set_rtmp_key(gname, new_key)
                         console.print(f"[green]✓ Key updated for '{rich_escape(gname)}'[/]")
+
+                    # Edit AppID
+                    current_appid = get_appid(gname)
+                    if RICH:
+                        new_appid = Prompt.ask(
+                            f"[cyan]New Steam AppID for '{rich_escape(gname)}'[/] (empty to keep)",
+                            default=current_appid,
+                        )
+                    else:
+                        new_appid = input(f"New Steam AppID for '{rich_escape(gname)}' [{current_appid}]: ").strip()
+                    if new_appid and new_appid != current_appid:
+                        set_appid(gname, new_appid)
+                        console.print(f"[green]✓ AppID updated for '{rich_escape(gname)}'[/]")
+                    elif not new_appid and current_appid:
+                        console.print("[dim]AppID unchanged.[/]")
                 else:
                     console.print("[yellow]Invalid number.[/]")
             except ValueError:
@@ -2427,10 +2476,11 @@ def show_daemon_menu():
             uptime = st.get("uptime", "?")
             streams = st.get("streams", [])
             live = sum(1 for s in streams if s.get("status") == "LIVE")
+            pushed = sum(1 for s in streams if s.get("status") == "PUSHED")
             dead = sum(1 for s in streams if s.get("status") == "DEAD")
 
             console.print(f"  [cyan]🔵 Daemon ACTIVE[/]  [dim]PID {pid} • uptime {uptime}[/]")
-            console.print(f"  [dim]Streams: {len(streams)} total ({live} live, {dead} dead)[/]")
+            console.print(f"  [dim]Streams: {len(streams)} total ({live} live, {pushed} pushed, {dead} dead)[/]")
             console.print()
 
             if streams:
@@ -2441,7 +2491,7 @@ def show_daemon_menu():
                     sts = s.get("status", "?")
                     bit = s.get("bitrate", "?")
                     spid = str(s.get("pid", "")) or "-"
-                    icon = "🟢" if sts == "LIVE" else ("🔴" if sts == "DEAD" else "⚪")
+                    icon = "🟢" if sts == "LIVE" else ("🟡" if sts == "PUSHED" else ("🔴" if sts == "DEAD" else "⚪"))
                     console.print(f"  {name:<25} {icon} {sts:<7} {bit:<10} {spid:<8}")
                 console.print()
 
@@ -2771,14 +2821,30 @@ def _cmd_daemon():
             print()
             streams = st.get("streams", [])
             if streams:
-                print(f"  {'Game':<25} {'Status':<10} {'Bitrate':<10}")
-                print(f"  {'─'*24} {'─'*9} {'─'*9}")
+                print(f"  {'Game':<25} {'State':<10} {'Bitrate':<10} Storefront")
+                print(f"  {'─'*24} {'─'*9} {'─'*9} {'─'*30}")
                 for s in streams:
                     name = s.get("name", "?")[:24]
                     sts = s.get("status", "?")
                     bit = s.get("bitrate", "?")
-                    icon = "🟢" if sts == "LIVE" else ("🔴" if sts == "DEAD" else "⚪")
-                    print(f"  {name:<25} {icon} {sts:<7} {bit:<10}")
+                    sf = s.get("storefront") or {}
+                    if sts == "LIVE":
+                        icon = "🟢"
+                        sf_txt = f"✅ {sf.get('resolution') or '?'} · {sf.get('bandwidth_kbps') or '?'}k"
+                    elif sts == "PUSHED":
+                        icon = "🟡"
+                        sf_txt = "⏳ awaiting storefront confirm"
+                    elif sts == "DEAD":
+                        icon = "🔴"
+                        sf_txt = "—"
+                    else:
+                        icon = "⚪"
+                        sf_txt = str(sf.get("error") or "—")
+                    print(f"  {name:<25} {icon} {sts:<7} {bit:<10} {sf_txt}")
+                print()
+                live_count = sum(1 for s in streams if s.get("status") == "LIVE")
+                pushed_count = sum(1 for s in streams if s.get("status") == "PUSHED")
+                print(f"  {live_count} LIVE · {pushed_count} PUSHED (of {len(streams)})")
             else:
                 print("  No active streams.")
         else:

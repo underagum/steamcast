@@ -2,9 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- **Storefront liveness verification (`liveness.py`).** New module deriving the broadcaster steamid64 directly from the RTMP key (`steam_<accountid>_<hash>` → `76561197960265728 + accountid`) and probing Steam's anonymous broadcast API (`getbroadcastinfo` → `is_online`, `getbroadcastmpd` → HLS manifest) to confirm a stream is *actually visible on the storefront* — no page scraping, no thumbnails, no auth. `probe_with_retries()` gives fresh streams benefit-of-the-doubt (3 × 10 s) because storefront registration lags the RTMP connect.
+- **PUSHED vs LIVE stream states in the daemon.** A stream is `PUSHED` the moment ffmpeg transmits to Steam RTMP; it is promoted to `LIVE` only after the storefront probe confirms visibility (HLS manifest parses with real resolution/bitrate). A background `_storefront_loop` re-probes every 30 s, promoting `PUSHED → LIVE`, demoting `LIVE → PUSHED` if the storefront stops showing the stream, and resetting to `PUSHED` on reconnect. State is exposed in `daemon status`, the HTTP `/status` API, and `state.json`.
+- **AppID in game profiles.** `config.json` games now carry an `appid` field; the Setup menu prompts for it when adding or editing a game. Displayed in status output alongside storefront specs.
+
 ### Changed
 
 - **CAST scheduling removed.** The interactive CAST menu no longer offers `[SCH]` delayed-start / auto-stop broadcasts — the start/end datetime prompts, pre-start countdown, and monitor-loop auto-stop were removed from `run_cast_stream()`. CAST now always starts immediately; the `restart_every_hours` auto-restart (default 4h) is unchanged. Scheduling lives exclusively in the headless daemon (`steamcast daemon schedule` / Daemon Manager `[5]`), which owns absolute start/end via systemd timers.
+- **`daemon status` table shows Storefront column.** `🟢 LIVE` includes confirmed specs (`✅ 1920x1080 · 5006k`); `🟡 PUSHED` shows "awaiting storefront confirm"; summary line counts both states.
 
 ## v1.6.2 — 2026-08-03
 
