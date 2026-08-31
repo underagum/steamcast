@@ -246,6 +246,33 @@ The same state is exposed in the HTTP API (`GET :6789/status` → per-stream `st
 
 ---
 
+## Web Dashboard (v2.1.0+)
+
+A terminal-style live attach screen, served by the host's web server and powered by the daemon's HTTP API — no daemon changes, no extra services.
+
+| URL | What it shows |
+|---|---|
+| `/steamcast` | Live dashboard: daemon PID/uptime, per-stream table (state, bitrate, verified storefront specs, **playback position**, PID, age), parked-tag context, color-coded log tail. Auto-refreshes every 5 s. |
+
+**How it's wired (UAGCloud reference):**
+
+```nginx
+# /etc/nginx/sites-enabled/default (inside the server block)
+location = /steamcast { return 301 /steamcast/; }
+location /steamcast/ {
+    alias /var/www/steamcast/;          # serve webui/index.html
+    index index.html;
+}
+location /steamcast/api/ {              # daemon HTTP API behind nginx
+    proxy_pass http://127.0.0.1:6789/;  # /status, /logs
+    proxy_read_timeout 10s;
+}
+```
+
+Deploy the page: copy `webui/index.html` from the repo to `/var/www/steamcast/index.html`. The daemon's HTTP server (`GET /status`, `GET /logs?n=N`) is the only backend — bind it to localhost and never expose port 6789 directly.
+
+---
+
 ## Steam Broadcast Spec Reference
 
 | Parameter | Steam wants | SteamCast delivers |

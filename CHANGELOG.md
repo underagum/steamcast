@@ -1,11 +1,19 @@
 # Changelog
 
-## Unreleased
+## v2.1.0 — 2026-08-31
 
 ### Added
 
+- **WebUI dashboard (`webui/index.html`).** Terminal-style live attach screen served at `/steamcast` on UAGCloud (nginx static + reverse proxy of the daemon's HTTP API at `127.0.0.1:6789`). Shows daemon status, per-stream table (state, bitrate, storefront specs, playback position, PID, uptime), parked-tag context, and a color-coded live log tail. Auto-refreshes every 5s. Single self-contained HTML, no external CDNs.
 - **Playback resume (no more 00:00 restarts).** Each game now tracks a cumulative `resume_offset` (seconds) that survives reconnects, auto-restarts, daemon restarts, and scheduled stop/start windows. On every (re)launch ffmpeg starts with `-ss <offset>`, so a rebroadcast continues from where the previous one stopped instead of replaying from the beginning. Offsets wrap via modulo when the video loops (duration probed once via ffprobe, cached); persisted in `state.json` under `resume`. Exposed in `/status` API as `resume_offset` per stream.
+- **Live position projection.** `_write_state` folds each live stream's elapsed runtime into its resume offset on every write (5s poll), so even a hard kill (SIGKILL/power loss) loses at most one poll cycle instead of the whole current incarnation. Dead streams keep their accumulated base.
 - **Page-context awareness in storefront probe (`probe_page`).** Steam tags a live RTMP broadcast to the app the owning account is *currently active in* — a delegated user playing another game temporarily moves the "live" tag off the configured app's page. `liveness.probe_page()` checks the app's community hub for our watch link and the daemon now computes a `parked` flag (probe `appid` ≠ configured `appid`). Purely informational: `daemon status` shows `📍 on '<game>' page` when parked, while status transitions remain account-liveness-only (no false demotions). API `storefront` objects gain `on_page`, `page_error`, and `parked` fields.
+
+### Changed
+
+- `steamcast daemon status` and the daemon manager now include the verified storefront specs (resolution · bitrate) and parked-tag context in the display.
+- `state.json` now carries a `resume` map (per-game cumulative offsets) alongside the per-stream `resume_offset`.
+- `config.json` profiles carry an `appid` per game, required for storefront verification (probe and page-context).
 
 ## v2.0.0 — 2026-08-28
 
