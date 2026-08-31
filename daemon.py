@@ -42,7 +42,7 @@ from pathlib import Path
 from threading import Thread
 from typing import Optional
 
-from liveness import probe_stream, probe_with_retries
+from liveness import probe_page, probe_stream, probe_with_retries
 
 # ── Helpers ──
 
@@ -144,6 +144,10 @@ class DaemonManager:
         self._log_buffer: list[str] = []
         self._max_log_lines = 500
         self._start_time: float | None = None
+        self._durations: dict[str, Optional[float]] = {}
+        # Per-game cumulative playback position (seconds) — survives reconnects
+        # and daemon restarts so broadcasts continue instead of restarting 00:00.
+        self._resume_offsets: dict[str, float] = self._load_resume_offsets()
 
     # ── Public API ──
 
@@ -466,6 +470,68 @@ class DaemonManager:
         while self._running:
             time.sleep(5)
 
+    def _load_resume_offsets(self) -> dict[str, float]:
+        """Load persisted per-game resume offsets from the state file."""
+        try:
+            if not STATE_FILE.exists():
+                return {}
+            state = json.loads(STATE_FILE.read_text())
+            resume = state.get("resume", {})
+            return {g: float(v) for g, v in resume.items() if isinstance(v, (int, float))}
+        except Exception:
+            return {}
+
+    def _probe_duration(self, video: str) -> Optional[float]:
+        """Return video duration in seconds via ffprobe (cached). None on failure."""
+        if video in self._durations:
+            return self._durations[video]
+        try:
+            sys.path.insert(0, str(Path(__file__).parent))
+            from steamcast import find_ffmpeg
+            ffmpeg = find_ffmpeg()
+            ffprobe = None
+            if ffmpeg:
+                cand = Path(ffmpeg).with_name("ffprobe" + (".exe" if sys.platform == "win32" else ""))
+                if cand.exists():
+                    ffprobe = str(cand)
+            if not ffprobe:
+                import shutil
+                ffprobe = shutil.which("ffprobe")
+            if not ffprobe:
+                return None
+            out = subprocess.run(
+                [ffprobe, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", video],
+                capture_output=True, text=True, timeout=30,
+            )
+            dur = float(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
+        except Exception:
+            dur = None
+        self._durations[video] = dur
+        return dur
+
+    def _build_stream_args(self, ffmpeg: str, video: str, stream_key: str,
+                           bitrate: str, resume_offset: float = 0.0) -> list[str]:
+        """Build ffmpeg args for one stream, seeking to resume_offset when > 0.
+
+        The video is looped (-stream_loop -1), so a resume offset past the end
+        wraps via modulo when duration is known — playback continues seamlessly
+        instead of restarting at 00:00 on every reconnect/daemon restart.
+        """
+        args = [ffmpeg, "-re", "-stream_loop", "-1"]
+        if resume_offset > 0:
+            args += ["-ss", f"{resume_offset:.3f}"]
+        args += [
+            "-i", str(video),
+            "-c", "copy",
+            "-f", "flv",
+            "-b:v", bitrate,
+            "-maxrate", bitrate,
+            "-bufsize", f"{_parse_bitrate_kbps(bitrate) * 2}k",
+            f"rtmp://ingest-rtmp.broadcast.steamcontent.com/app/{stream_key}",
+        ]
+        return args
+
     def _run_engine(self, games: list[dict], restart_every: int):
         """Headless stream engine — extracted from run_cast_stream logic."""
         self._running = True
@@ -498,17 +564,17 @@ class DaemonManager:
                 continue
 
             rtmp_url = f"rtmp://ingest-rtmp.broadcast.steamcontent.com/app/{game.get('stream_key', '')}"
-            args = [
-                ffmpeg,
-                "-re", "-stream_loop", "-1",
-                "-i", str(video),
-                "-c", "copy",
-                "-f", "flv",
-                "-b:v", bitrate,
-                "-maxrate", bitrate,
-                "-bufsize", f"{_parse_bitrate_kbps(bitrate) * 2}k",
-                str(rtmp_url),
-            ]
+            # Resume: continue from the persisted playback position instead of
+            # restarting at 00:00 on every daemon start. Offset wraps via modulo
+            # when the video loops (duration probed once, cached).
+            resume_offset = self._resume_offsets.get(gname, 0.0)
+            duration = self._probe_duration(str(video))
+            if duration and resume_offset >= duration:
+                resume_offset = resume_offset % duration
+                self._resume_offsets[gname] = resume_offset
+            args = self._build_stream_args(ffmpeg, str(video), game.get("stream_key", ""), bitrate, resume_offset)
+            if resume_offset > 0:
+                self._log(f"⏯ {gname} resuming at {self._fmt_offset(resume_offset)} (of {self._fmt_offset(duration) if duration else '?'})")
 
             proc = subprocess.Popen(
                 args,
@@ -526,6 +592,8 @@ class DaemonManager:
                     "stream_key": game.get("stream_key", ""),
                     "appid": game.get("appid", ""),
                     "started_at": datetime.now().isoformat(),
+                    "resume_offset": resume_offset,
+                    "duration": duration,
                     # PUSHED = transmitting to Steam RTMP; promoted to LIVE only
                     # once the storefront probe confirms visibility.
                     "status": "PUSHED",
@@ -572,8 +640,27 @@ class DaemonManager:
                         logger.warning("Stream %s died (exit %d). Reconnecting...", gname, exit_code)
                         self._log(f"✗ {gname} died (exit {exit_code}). Reconnecting...")
 
-                        # Restart stream using stored args
+                        # Resume: fold this incarnation's played time into the
+                        # offset so the rebroadcast continues, not restarts.
+                        self._accumulate_resume(gname, stream)
+                        resume_offset = self._resume_offsets.get(gname, 0.0)
+
+                        # Restart stream using freshly built args (with -ss seek)
+                        try:
+                            sys.path.insert(0, str(Path(__file__).parent))
+                            from steamcast import find_ffmpeg
+                            ffmpeg_path = find_ffmpeg()
+                        except Exception:
+                            ffmpeg_path = None
                         args = stream.get("start_args", [])
+                        if ffmpeg_path and stream.get("video"):
+                            args = self._build_stream_args(
+                                ffmpeg_path,
+                                stream["video"],
+                                stream.get("stream_key", ""),
+                                stream.get("bitrate", "5000k"),
+                                resume_offset,
+                            )
                         if args:
                             new_proc = subprocess.Popen(
                                 args,
@@ -582,11 +669,15 @@ class DaemonManager:
                             )
                             stream["proc"] = new_proc
                             proc = new_proc  # update local ref for status check below
+                            stream["start_args"] = args
                             # Reconnected = back to PUSHED until storefront re-confirms.
                             stream["status"] = "PUSHED"
                             stream["storefront"] = None
                             stream["started_at"] = datetime.now().isoformat()
+                            stream["resume_offset"] = resume_offset
                             self._log(f"↻ {gname} reconnected (PID {new_proc.pid})")
+                            if resume_offset > 0:
+                                self._log(f"⏯ {gname} resuming at {self._fmt_offset(resume_offset)}")
                         else:
                             stream["status"] = "DEAD"
                             self._log(f"✗ {gname} — start args missing, cannot reconnect")
@@ -644,6 +735,28 @@ class DaemonManager:
 
                 online = bool(result.get("online"))
                 err = result.get("error")
+                # Per-app page context: Steam tags the broadcast to the app the
+                # account is CURRENTLY active in, so the tag can wander while
+                # the stream is fine. Informational — never transitions.
+                cfg_appid = str(stream.get("appid", "") or "")
+                probe_appid = str(result.get("appid") or "")
+                # Parked = the account is tagged to a DIFFERENT game than the
+                # one this key is configured for (e.g. a delegated user playing
+                # another title). Appid match means the broadcast is on our
+                # game — even if the hub page renders stripped to anonymous
+                # visitors (dreadout 2's hub does this), the API is the truth.
+                parked = bool(online and not err and cfg_appid and probe_appid and probe_appid != cfg_appid)
+                page = None
+                page_err = None
+                if online and not err:
+                    pg = probe_page(cfg_appid, result.get("steamid"))
+                    page = pg.get("on_page")
+                    page_err = pg.get("error")
+                    if parked:
+                        self._log(
+                            f"📍 {gname} tag on '{result.get('title') or probe_appid}' page — "
+                            f"not {cfg_appid} (delegated user active?)"
+                        )
                 with self._streams_lock:
                     # The monitor loop may have reconnected this stream (new
                     # Popen object) while we probed — this result describes
@@ -665,6 +778,9 @@ class DaemonManager:
                         "bandwidth_kbps": result.get("bandwidth_kbps"),
                         "hls_url": result.get("hls_url"),
                         "error": result.get("error"),
+                        "on_page": page,
+                        "page_error": page_err,
+                        "parked": parked,
                     }
 
             time.sleep(30)
@@ -675,6 +791,9 @@ class DaemonManager:
             for gname, stream in list(self._active_streams.items()):
                 proc = stream.get("proc")
                 if proc and proc.poll() is None:
+                    # Fold played time into resume offset before killing —
+                    # reconnect respawns with -ss and the broadcast continues.
+                    self._accumulate_resume(gname, stream)
                     proc.kill()
                     logger.info("Killed stream: %s (PID %d)", gname, proc.pid)
                     # Back to PUSHED + unconfirmed until the storefront
@@ -692,6 +811,9 @@ class DaemonManager:
             for gname, stream in list(self._active_streams.items()):
                 proc = stream.get("proc")
                 if proc and proc.poll() is None:
+                    # Persist final position so the next scheduled window
+                    # resumes where this one stopped.
+                    self._accumulate_resume(gname, stream)
                     proc.terminate()
                     try:
                         proc.wait(timeout=5)
@@ -718,12 +840,60 @@ class DaemonManager:
             return str(timedelta(seconds=int(elapsed)))
         return "unknown"
 
+    @staticmethod
+    def _fmt_offset(seconds: Optional[float]) -> str:
+        """Format seconds as H:MM:SS (or '?' when unknown)."""
+        if seconds is None:
+            return "?"
+        seconds = max(0, int(seconds))
+        h, rem = divmod(seconds, 3600)
+        m, s = divmod(rem, 60)
+        return f"{h}:{m:02d}:{s:02d}"
+
+    def _accumulate_resume(self, gname: str, stream: dict):
+        """Add this incarnation's played time to the game's resume offset.
+
+        Called when a stream process dies (before respawn) or is being
+        stopped permanently. The offset is capped/wrapped to the video
+        duration when known so looping stays seamless.
+        """
+        duration = stream.get("duration")
+        base = stream.get("resume_offset", 0.0) or 0.0
+        try:
+            started = datetime.fromisoformat(stream["started_at"])
+            played = max(0.0, (datetime.now() - started).total_seconds())
+        except Exception:
+            played = 0.0
+        offset = base + played
+        if duration:
+            offset = offset % duration
+        self._resume_offsets[gname] = offset
+
     def _write_state(self):
         """Write current state to JSON file for external tools."""
         with self._streams_lock:
+            # Project live positions: base offset + elapsed since process start,
+            # so even a hard kill (SIGKILL/power loss) loses at most 5s of
+            # position instead of the whole current incarnation.
+            resume = {g: round(v, 3) for g, v in self._resume_offsets.items()}
+            now = datetime.now()
+            for gname, s in self._active_streams.items():
+                if s.get("proc") and s["proc"].poll() is None:
+                    base = s.get("resume_offset", 0.0) or 0.0
+                    try:
+                        started = datetime.fromisoformat(s["started_at"])
+                        played = max(0.0, (now - started).total_seconds())
+                    except Exception:
+                        played = 0.0
+                    duration = s.get("duration")
+                    projected = base + played
+                    if duration:
+                        projected = projected % duration
+                    resume[gname] = round(projected, 3)
             state = {
                 "pid": os.getpid(),
                 "uptime_seconds": int(time.time() - self._start_time) if self._start_time else 0,
+                "resume": resume,
                 "streams": {
                     gname: {
                         "status": s.get("status", "UNKNOWN"),
@@ -731,6 +901,7 @@ class DaemonManager:
                         "started_at": s.get("started_at", ""),
                         "pid": s.get("proc", None) and (s["proc"].pid or None),
                         "appid": s.get("appid", ""),
+                        "resume_offset": s.get("resume_offset", 0.0),
                         "storefront": s.get("storefront"),
                     }
                     for gname, s in self._active_streams.items()
@@ -778,6 +949,7 @@ class SteamCastDaemonServer:
                                     "pid": proc.pid if (proc := s.get("proc")) and proc.poll() is None else None,
                                     "started_at": s.get("started_at", ""),
                                     "appid": s.get("appid", ""),
+                                    "resume_offset": round(s.get("resume_offset", 0.0) or 0.0, 1),
                                     "storefront": s.get("storefront"),
                                 }
                                 for gname, s in daemon._active_streams.items()

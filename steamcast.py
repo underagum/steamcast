@@ -2830,7 +2830,14 @@ def _cmd_daemon():
                     sf = s.get("storefront") or {}
                     if sts == "LIVE":
                         icon = "🟢"
-                        sf_txt = f"✅ {sf.get('resolution') or '?'} · {sf.get('bandwidth_kbps') or '?'}k"
+                        specs = f"✅ {sf.get('resolution') or '?'} · {sf.get('bandwidth_kbps') or '?'}k"
+                        # Parked = account is live but Steam tagged the broadcast
+                        # to a DIFFERENT game's page (delegated user active).
+                        if sf.get("parked"):
+                            parked = sf.get("title") or sf.get("appid") or "?"
+                            sf_txt = f"{specs} · 📍 on '{parked}' page"
+                        else:
+                            sf_txt = specs
                     elif sts == "PUSHED":
                         icon = "🟡"
                         sf_err = sf.get("error")

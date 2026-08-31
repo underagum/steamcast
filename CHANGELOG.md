@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Playback resume (no more 00:00 restarts).** Each game now tracks a cumulative `resume_offset` (seconds) that survives reconnects, auto-restarts, daemon restarts, and scheduled stop/start windows. On every (re)launch ffmpeg starts with `-ss <offset>`, so a rebroadcast continues from where the previous one stopped instead of replaying from the beginning. Offsets wrap via modulo when the video loops (duration probed once via ffprobe, cached); persisted in `state.json` under `resume`. Exposed in `/status` API as `resume_offset` per stream.
+- **Page-context awareness in storefront probe (`probe_page`).** Steam tags a live RTMP broadcast to the app the owning account is *currently active in* — a delegated user playing another game temporarily moves the "live" tag off the configured app's page. `liveness.probe_page()` checks the app's community hub for our watch link and the daemon now computes a `parked` flag (probe `appid` ≠ configured `appid`). Purely informational: `daemon status` shows `📍 on '<game>' page` when parked, while status transitions remain account-liveness-only (no false demotions). API `storefront` objects gain `on_page`, `page_error`, and `parked` fields.
+
 ## v2.0.0 — 2026-08-28
 
 ### Added

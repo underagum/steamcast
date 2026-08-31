@@ -215,6 +215,25 @@ SteamCast no longer trusts "ffmpeg is running" as proof of liveness. Every strea
 - If a `LIVE` stream stops being visible on the storefront, it drops back to `PUSHED` with a log line
 - Transient probe errors (timeouts, rate limits) never flip your status — only clean answers do
 
+**Page context — where the stream actually is.** Steam tags a live RTMP broadcast to the app the owning account is *currently active in*. If a delegated user opens another game, the live tag temporarily moves off your page — the stream is fine, but it's showing under the other game's storefront. SteamCast reports this as context, never as an error:
+
+```bash
+# Normal — stream is on its own page
+# JRDD                      🟢 LIVE    5000k      ✅ 1920x1080 · 5006k
+# Tag parked elsewhere (delegated user playing another game):
+# DORC                      🟢 LIVE    5000k      ✅ 1920x1080 · 5007k · 📍 on 'DSX' page
+```
+
+The `📍 parked` marker appears when the probe's reported app differs from the game the key is configured for. When the delegated user exits the other game, the tag returns automatically — no key changes needed.
+
+**Seamless resume — no more 00:00 restarts.** Every stream remembers where it was. Each game carries a cumulative `resume_offset` that survives:
+- ffmpeg reconnects (crash, network drop)
+- daemon auto-restarts (`restart_every`)
+- full daemon restarts (`steamcast daemon stop` / `start`)
+- scheduled broadcast windows (next window picks up where the last stopped)
+
+On relaunch the daemon rebuilds ffmpeg args with `-ss <offset>`, so the broadcast continues instead of replaying from the top. Offsets wrap automatically when the looped video reaches its end (duration probed once via ffprobe), and are persisted in `~/.steamcast/state.json` under `resume`. `steamcast daemon status` shows `⏯ resuming at H:MM:SS` in the log; the `/status` API exposes `resume_offset` per stream. To start fresh, delete the `resume` block from `state.json` while the daemon is stopped.
+
 ```bash
 steamcast daemon status
 # Game                      State      Bitrate    Storefront
