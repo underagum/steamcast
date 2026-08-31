@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SteamCast — Daemon Attach</title>
+<style>
+  :root {
+    --bg: #0a0f0a;
+    --bg2: #0d130d;
+    --line: #1c2a1c;
+    --green: #4ade80;
+    --green-dim: #2f9e5f;
+    --text: #b8f0c0;
+    --dim: #5f8f6f;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --cyan: #67e8f9;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Cascadia Mono", "JetBrains Mono", ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+    font-size: 14px;
+    padding: 20px;
+    min-height: 100vh;
+  }
+  /* faint scanline texture */
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,0.015) 0 1px, transparent 1px 3px);
+    pointer-events: none;
+    z-index: 99;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
+  h1 { font-size: 16px; font-weight: 700; color: var(--green); letter-spacing: 2px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+  .dot.up { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.down { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  #daemonLine { color: var(--dim); font-size: 13px; }
+  #clock { margin-left: auto; color: var(--dim); font-size: 12px; }
+
+  .summary { margin: 10px 0 6px; font-size: 13px; color: var(--cyan); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--dim); font-weight: 600; font-size: 11px;
+       text-transform: uppercase; letter-spacing: 1px; padding: 6px 8px;
+       border-bottom: 1px solid var(--line); }
+  td { padding: 6px 8px; border-bottom: 1px solid rgba(28,42,28,0.6); vertical-align: top; }
+  tr:hover td { background: var(--bg2); }
+  .st { font-weight: 700; white-space: nowrap; }
+  .st-LIVE   { color: var(--green); }
+  .st-PUSHED { color: var(--yellow); }
+  .st-DEAD   { color: var(--red); }
+  .st-?      { color: var(--dim); }
+  .sf { color: var(--dim); word-break: break-word; }
+  .sf .spec { color: var(--green-dim); }
+  .sf .parked { color: var(--yellow); }
+  .sf .err { color: var(--red); }
+
+  .logs { margin-top: 20px; }
+  .logs h2 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  #logbox {
+    background: var(--bg2); border: 1px solid var(--line); border-radius: 4px;
+    padding: 10px 12px; height: 170px; overflow-y: auto;
+    font-size: 12px; line-height: 1.55; color: var(--dim);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  #logbox .ok { color: var(--green-dim); }
+  #logbox .warn { color: var(--yellow); }
+  #logbox .err { color: var(--red); }
+
+  #cursor { display: inline-block; width: 8px; height: 14px; background: var(--green);
+            vertical-align: text-bottom; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .foot { margin-top: 14px; color: var(--dim); font-size: 11px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .badge { border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; font-size: 11px; color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>▚ STEAMCAST</h1>
+    <span class="dot" id="dot"></span>
+    <span id="daemonLine">connecting…</span>
+    <span id="clock"></span>
+  </header>
+
+  <div class="summary" id="summary">—</div>
+
+  <table id="streams">
+    <thead>
+      <tr><th>Game</th><th>State</th><th>Bitrate</th><th>Storefront</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <div class="logs">
+    <h2>Daemon Log <span id="cursor"></span></h2>
+    <div id="logbox">—</div>
+  </div>
+
+  <div class="foot">
+    <span class="badge" id="lastPoll">—</span>
+    <span class="badge" id="apiNote">api: /status + /logs</span>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function tick() {
+  const now = new Date();
+  $("clock").textContent = now.toLocaleTimeString("en-GB", { hour12: false });
+}
+
+function fmtStarted(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const s = d.toLocaleTimeString("en-GB", { hour12: false });
+  const ago = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
+  const h = Math.floor(ago / 3600), m = Math.floor((ago % 3600) / 60);
+  return `${s} (${h}h ${m}m ago)`;
+}
+
+function render(data) {
+  const up = !!(data && data.running);
+  $("dot").className = "dot " + (up ? "up" : "down");
+  if (up) {
+    $("daemonLine").textContent = `daemon running — PID ${data.pid} · uptime ${data.uptime}`;
+  } else {
+    $("daemonLine").textContent = "daemon OFFLINE";
+  }
+
+  const streams = (data && data.streams) || [];
+  const live = streams.filter(s => s.status === "LIVE").length;
+  const pushed = streams.filter(s => s.status === "PUSHED").length;
+  $("summary").textContent =
+    up ? `${live} LIVE · ${pushed} PUSHED (of ${streams.length})` : "no daemon — nothing to show";
+
+  const tbody = document.querySelector("#streams tbody");
+  if (!streams.length) {
+    tbody.innerHTML = `<tr><td colspan="4" style="color:var(--dim)">no active streams</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = streams.map(s => {
+    const st = s.status || "?";
+    const sf = s.storefront || {};
+    let sfTxt = `<span class="sf">—</span>`;
+    if (st === "LIVE") {
+      let spec = `<span class="spec">✅ ${esc(sf.resolution || "?")} · ${esc(sf.bandwidth_kbps ?? "?")}k</span>`;
+      if (sf.parked) {
+        const parked = esc(sf.title || sf.appid || "?");
+        spec += ` <span class="parked">📍 on '${parked}' page</span>`;
+      }
+      sfTxt = `<span class="sf">${spec}</span>`;
+    } else if (st === "PUSHED") {
+      const e = sf.error ? ` <span class="err">(${esc(sf.error)})</span>` : "";
+      sfTxt = `<span class="sf">⏳ awaiting storefront confirm${e}</span>`;
+    } else if (st === "DEAD") {
+      sfTxt = `<span class="sf">—</span>`;
+    }
+    return `<tr>
+      <td>${esc(s.name || "?")}</td>
+      <td class="st st-${esc(st)}">${st}</td>
+      <td>${esc(s.bitrate || "?")}</td>
+      <td>${sfTxt}<span style="color:var(--dim);font-size:11px"> · pid ${esc(s.pid ?? "?")} · ${fmtStarted(s.started_at)}</span></td>
+    </tr>`;
+  }).join("");
+}
+
+function renderLogs(obj) {
+  const lines = (obj && obj.lines) || [];
+  const box = $("logbox");
+  if (!lines.length) { box.textContent = "(no log output)"; return; }
+  box.innerHTML = lines.map(l => {
+    const t = esc(l);
+    if (/⚠|📍|reconnect|no longer/i.test(t)) return `<span class="warn">${t}</span>`;
+    if (/error|failed|dead/i.test(t)) return `<span class="err">${t}</span>`;
+    if (/✅|LIVE|confirmed/i.test(t)) return `<span class="ok">${t}</span>`;
+    return t;
+  }).join("\n");
+  box.scrollTop = box.scrollHeight;
+}
+
+async function poll() {
+  try {
+    const [s, l] = await Promise.all([
+      fetch("/steamcast/api/status", { cache: "no-store" }),
+      fetch("/steamcast/api/logs?n=40", { cache: "no-store" }),
+    ]);
+    const data = s.ok ? await s.json() : null;
+    const logs = l.ok ? await l.json() : null;
+    render(data);
+    renderLogs(logs);
+    $("lastPoll").textContent = "last poll " + new Date().toLocaleTimeString("en-GB", { hour12: false });
+  } catch (e) {
+    render(null);
+    $("logbox").textContent = "⚠ cannot reach daemon API (" + esc(e.message) + ")";
+    $("lastPoll").textContent = "last poll failed";
+  }
+}
+
+tick();
+setInterval(tick, 1000);
+poll();
+setInterval(poll, 5000);
+</script>
+</body>
+</html>
