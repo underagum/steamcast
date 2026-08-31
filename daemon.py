@@ -872,10 +872,28 @@ class DaemonManager:
     def _write_state(self):
         """Write current state to JSON file for external tools."""
         with self._streams_lock:
+            # Project live positions: base offset + elapsed since process start,
+            # so even a hard kill (SIGKILL/power loss) loses at most 5s of
+            # position instead of the whole current incarnation.
+            resume = {g: round(v, 3) for g, v in self._resume_offsets.items()}
+            now = datetime.now()
+            for gname, s in self._active_streams.items():
+                if s.get("proc") and s["proc"].poll() is None:
+                    base = s.get("resume_offset", 0.0) or 0.0
+                    try:
+                        started = datetime.fromisoformat(s["started_at"])
+                        played = max(0.0, (now - started).total_seconds())
+                    except Exception:
+                        played = 0.0
+                    duration = s.get("duration")
+                    projected = base + played
+                    if duration:
+                        projected = projected % duration
+                    resume[gname] = round(projected, 3)
             state = {
                 "pid": os.getpid(),
                 "uptime_seconds": int(time.time() - self._start_time) if self._start_time else 0,
-                "resume": {g: round(v, 3) for g, v in self._resume_offsets.items()},
+                "resume": resume,
                 "streams": {
                     gname: {
                         "status": s.get("status", "UNKNOWN"),
