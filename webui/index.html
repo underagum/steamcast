@@ -130,6 +130,13 @@ function fmtStarted(iso) {
   return `${s} (${h}h ${m}m ago)`;
 }
 
+function fmtOffset(sec) {
+  if (sec === null || sec === undefined) return "?";
+  sec = Math.max(0, Math.floor(Number(sec) || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 function render(data) {
   const up = !!(data && data.running);
   $("dot").className = "dot " + (up ? "up" : "down");
@@ -171,7 +178,7 @@ function render(data) {
       <td>${esc(s.name || "?")}</td>
       <td class="st st-${esc(st)}">${st}</td>
       <td>${esc(s.bitrate || "?")}</td>
-      <td>${sfTxt}<span style="color:var(--dim);font-size:11px"> · pid ${esc(s.pid ?? "?")} · ${fmtStarted(s.started_at)}</span></td>
+      <td>${sfTxt}<span style="color:var(--dim);font-size:11px"> · pos ${fmtOffset(s.resume_offset)} · pid ${esc(s.pid ?? "?")} · ${fmtStarted(s.started_at)}</span></td>
     </tr>`;
   }).join("");
 }
