@@ -755,7 +755,7 @@ class DaemonManager:
                     if parked:
                         self._log(
                             f"📍 {gname} tag on '{result.get('title') or probe_appid}' page — "
-                            f"not {cfg_appid} (delegated user active?)"
+                            f"not {cfg_appid} (account playing another game?)"
                         )
                 with self._streams_lock:
                     # The monitor loop may have reconnected this stream (new
