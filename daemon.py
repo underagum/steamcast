@@ -42,7 +42,7 @@ from pathlib import Path
 from threading import Thread
 from typing import Optional
 
-from liveness import probe_stream, probe_with_retries
+from liveness import probe_page, probe_stream, probe_with_retries
 
 # ── Helpers ──
 
@@ -644,6 +644,28 @@ class DaemonManager:
 
                 online = bool(result.get("online"))
                 err = result.get("error")
+                # Per-app page context: Steam tags the broadcast to the app the
+                # account is CURRENTLY active in, so the tag can wander while
+                # the stream is fine. Informational — never transitions.
+                cfg_appid = str(stream.get("appid", "") or "")
+                probe_appid = str(result.get("appid") or "")
+                # Parked = the account is tagged to a DIFFERENT game than the
+                # one this key is configured for (e.g. a delegated user playing
+                # another title). Appid match means the broadcast is on our
+                # game — even if the hub page renders stripped to anonymous
+                # visitors (dreadout 2's hub does this), the API is the truth.
+                parked = bool(online and not err and cfg_appid and probe_appid and probe_appid != cfg_appid)
+                page = None
+                page_err = None
+                if online and not err:
+                    pg = probe_page(cfg_appid, result.get("steamid"))
+                    page = pg.get("on_page")
+                    page_err = pg.get("error")
+                    if parked:
+                        self._log(
+                            f"📍 {gname} tag on '{result.get('title') or probe_appid}' page — "
+                            f"not {cfg_appid} (delegated user active?)"
+                        )
                 with self._streams_lock:
                     # The monitor loop may have reconnected this stream (new
                     # Popen object) while we probed — this result describes
@@ -665,6 +687,9 @@ class DaemonManager:
                         "bandwidth_kbps": result.get("bandwidth_kbps"),
                         "hls_url": result.get("hls_url"),
                         "error": result.get("error"),
+                        "on_page": page,
+                        "page_error": page_err,
+                        "parked": parked,
                     }
 
             time.sleep(30)

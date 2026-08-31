@@ -215,6 +215,17 @@ SteamCast no longer trusts "ffmpeg is running" as proof of liveness. Every strea
 - If a `LIVE` stream stops being visible on the storefront, it drops back to `PUSHED` with a log line
 - Transient probe errors (timeouts, rate limits) never flip your status — only clean answers do
 
+**Page context — where the stream actually is.** Steam tags a live RTMP broadcast to the app the owning account is *currently active in*. If a delegated user opens another game, the live tag temporarily moves off your page — the stream is fine, but it's showing under the other game's storefront. SteamCast reports this as context, never as an error:
+
+```bash
+# Normal — stream is on its own page
+# JRDD                      🟢 LIVE    5000k      ✅ 1920x1080 · 5006k
+# Tag parked elsewhere (delegated user playing another game):
+# DORC                      🟢 LIVE    5000k      ✅ 1920x1080 · 5007k · 📍 on 'DSX' page
+```
+
+The `📍 parked` marker appears when the probe's reported app differs from the game the key is configured for. When the delegated user exits the other game, the tag returns automatically — no key changes needed.
+
 ```bash
 steamcast daemon status
 # Game                      State      Bitrate    Storefront

@@ -17,6 +17,13 @@ LIVE  = probe with no error: is_online true AND hls manifest fetch succeeds
         (resolution/bitrate parsed when the manifest carries EXT-X-STREAM-INF)
 PUSHED = ffmpeg is transmitting but storefront not (yet) confirmed
 
+Per-app page context (probe_page): Steam tags a live RTMP broadcast to the
+app the owning account is CURRENTLY active in (delegated users playing other
+games temporarily move the tag). getbroadcastinfo's appid reflects that
+wandering tag, NOT the key's configured app. probe_page() checks the app's
+community hub page for our watch link to report WHERE the stream actually
+is — informational only, never a status transition.
+
 Why not the old thumbnail method: the community broadcasts hub page is
 session-dependent (broadcaster sees cards, anonymous gets stripped HTML),
 so anonymous thumbnail probes produce false negatives. These endpoints
@@ -165,3 +172,34 @@ def probe_with_retries(rtmp_key: str, attempts: int = 3, delay: float = 10.0) ->
         time.sleep(delay)
         last = probe_stream(rtmp_key)
     return last
+
+
+def probe_page(appid, steamid: Optional[int]) -> dict:
+    """Check whether the account's broadcast appears on a specific app's page.
+
+    Steam tags a live RTMP broadcast to the app the owning account is
+    CURRENTLY active in, so a broadcast can temporarily appear on another
+    game's page even though the key is configured for this app. This
+    function checks the app's community broadcasts hub for our watch link
+    to report WHERE the stream actually is.
+
+    Returns:
+        {"on_page": bool|None, "error": str|None}
+        - on_page True  → our watch link found on this app's hub page
+        - on_page False → account is live but the tag is parked elsewhere
+        - on_page None  → could not determine (missing appid/sid, fetch error)
+
+    Informational only — callers must NOT use this to transition status.
+    """
+    if not appid or not steamid:
+        return {"on_page": None, "error": "missing appid or steamid"}
+    try:
+        req = urllib.request.Request(
+            f"https://steamcommunity.com/app/{appid}/broadcasts/",
+            headers={"User-Agent": USER_AGENT},
+        )
+        html = urllib.request.urlopen(req, timeout=TIMEOUT).read().decode("utf-8", "ignore")
+        on_page = f"broadcast/watch/{steamid}" in html
+        return {"on_page": on_page, "error": None}
+    except Exception as e:
+        return {"on_page": None, "error": f"page check: {e}"}
