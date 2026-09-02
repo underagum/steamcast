@@ -1159,7 +1159,10 @@ def show_prep_phase():
 
     # ── Progress display helper ──
     total_dur_str: str = ""
-    _last_fps: float = 30.0
+    # Output frame rate (SPEC, e.g. 30fps). NOTE: ffmpeg's progress "fps="
+    # field is the ENCODE SPEED (~160 here), NOT the output fps — using it
+    # for frame totals made the bar show /244824 instead of /45904.
+    _last_fps: float = float(SPEC.video_fps or 30.0)
     _total_sec: float = 0.0
 
     def _parse_int(text: str, pattern: str) -> int | None:
@@ -1190,8 +1193,9 @@ def show_prep_phase():
         bitrate_k = _parse_float(raw, r"bitrate=\s*([\d.]+)kbits/s")
         speed = _parse_float(raw, r"speed=\s*([\d.]+)x")
 
-        if fps:
-            _last_fps = fps
+        # NOTE: ffmpeg's "fps=" is ENCODE speed (~160), NOT output frame
+        # rate. _last_fps stays pinned to SPEC.video_fps (30) so frame
+        # totals + ETA use the real denominator (/45904, not /244824).
 
         # Build pipe-separated display
         parts = []
@@ -1246,9 +1250,15 @@ def show_prep_phase():
         if eta_str:
             display += f" | {eta_str}"
 
-        line = f"\r\033[K  [dim]{display}[/]" if RICH else f"\r\033[K  {display}"
-        clean = re.sub(r"\[/?[^\]]+\]", "", line) if RICH else line
-        clean = clean[:cols]
+        # BUGFIX (2026-09-02): never regex-strip Rich markup out of a string
+        # that also carries ANSI codes — re.sub(r"\[/?[^\]]+\]", "") ate the
+        # "[K" of "\033[K" (erase-to-EOL), leaving a bare ESC that terminals
+        # parse as "ESC F" and swallow the leading 'F' of "Frame" ("rame").
+        # The [dim] wrap was dead code anyway (plain print() below, so Rich
+        # never rendered it). Pad to full terminal width instead so shorter
+        # re-renders fully overwrite the previous line — no ANSI dependency,
+        # no stale tail (was visible as "ETA 4:224" leftover digits).
+        clean = f"\r  {display}"[:cols].ljust(cols)
         print(clean, end="", flush=True)
 
     console.print("[dim]Press Ctrl+C to cancel at any time.[/]")
