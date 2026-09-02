@@ -591,10 +591,19 @@ class DaemonManager:
             return os.devnull
 
     def _spawn_stream(self, args: list[str], gname: str):
-        """Spawn one ffmpeg process, keeping its stderr on disk."""
+        """Spawn one ffmpeg process, keeping its stderr on disk.
+
+        The previous incarnation's log is preserved as ffmpeg_<g>_prev.log
+        so the death error survives the truncating respawn."""
         err_path = self._ffmpeg_stderr_path(gname)
+        prev_path = err_path.replace(".log", "_prev.log")
         try:
-            err_fh = open(err_path, "w")  # truncate previous incarnation's log
+            if os.path.exists(err_path):
+                os.replace(err_path, prev_path)  # keep last incarnation's log
+        except OSError:
+            pass
+        try:
+            err_fh = open(err_path, "w")  # truncate for the new incarnation
         except Exception:
             err_fh = open(os.devnull, "w")
         proc = subprocess.Popen(
