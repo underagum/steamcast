@@ -1300,7 +1300,7 @@ def show_prep_phase():
             print("\r\033[K", end="", flush=True)
             if ok:
                 console.print(f"[green]✓ {rich_escape(gname)} converted successfully[/]")
-                success_count += 1
+                success_count += 1 if _gate_audio(out_path) else 0
             else:
                 console.print(f"[red]✗ Failed to convert {rich_escape(gname)}[/]")
                 console.print(f"  [dim]Full log: {prep_log}[/]")
@@ -1388,7 +1388,7 @@ def show_prep_phase():
 
                 if ok:
                     console.print(f"[green]✓ {rich_escape(gname)} ready: {out_path}[/]")
-                    success_count += 1
+                    success_count += 1 if _gate_audio(out_path) else 0
                 else:
                     console.print(f"[red]✗ Failed to concatenate {rich_escape(gname)}[/]")
                     console.print(f"  [dim]Full log: {concat_log}[/]")
@@ -2658,6 +2658,62 @@ def _setup_windows_console():
 
     except Exception:
         pass  # non-critical — app still works with SIGINT behavior
+
+
+def _audio_gap_scan(path: Path) -> list:
+    """Return list of (start_s, end_s) audio holes > 0.5s in a file.
+
+    Root-cause gate for Steam ingest RSTs (exit 152): -c copy streams the
+    file's own AAC; multi-minute holes = video-only broadcast = Steam kills
+    the session. Every PREP output must pass this before it may ship.
+    """
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "packet=pts_time", "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=120)
+        pkts = json.loads(out.stdout).get("packets", [])
+    except Exception:
+        return []  # no audio stream or probe failure → not our gate
+    pts = sorted(float(p["pts_time"]) for p in pkts if p.get("pts_time") is not None)
+    if not pts:
+        return []
+    holes, prev = [], pts[0]
+    for p in pts[1:]:
+        if p - prev > 0.5:
+            holes.append((prev, p))
+        prev = p
+    return holes
+
+
+def _audio_repair(path: Path) -> bool:
+    """Rebuild audio: real regions + generated silence for each hole, video
+    copied untouched, normalized AAC 128k/44.1k stereo. In-place via temp."""
+    import repair_audio as ra
+    tmp = path.with_suffix(".fixed.mp4")
+    try:
+        rc = ra.main([str(path), str(tmp)])
+    except SystemExit:
+        rc = 1
+    if rc != 0 or not tmp.exists():
+        return False
+    os.replace(tmp, path)
+    return True
+
+
+def _gate_audio(path: Path) -> bool:
+    """Post-encode gate: refuse silent audio holes; auto-repair once."""
+    holes = _audio_gap_scan(path)
+    if not holes:
+        return True
+    h = ", ".join(f"{a:.0f}-{b:.0f}s" for a, b in holes)
+    console.print(f"[yellow]⚠ {rich_escape(path.name)}: audio holes {h} — repairing...[/]")
+    ok = _audio_repair(path)
+    if ok and not _audio_gap_scan(path):
+        console.print(f"[green]  ✓ audio repaired ({h})[/]")
+        return True
+    console.print(f"[red]  ✗ audio repair failed — refusing to ship[/]")
+    return False
 
 
 def main():
