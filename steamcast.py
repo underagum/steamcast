@@ -588,11 +588,25 @@ def build_ffmpeg_args(
         "-profile:v", SPEC.video_profile,
         "-level:v", SPEC.video_level,
         "-b:v", SPEC.video_bitrate,
-        "-minrate", SPEC.video_bitrate,
-        "-maxrate", SPEC.video_bitrate,
-        # bufsize = 6500k - bitrate: worst-case burst (maxrate+bufsize)
-        # stays 500k under Steam's 7000k ingest cap for headroom.
-        "-bufsize", f"{6500 - int(SPEC.video_bitrate.replace('k', ''))}k",
+    ]
+    if enc.codec == "h264_nvenc":
+        # NVENC ignores -minrate/-maxrate/-bufsize in -rc cbr mode (CPB
+        # shows min=0) and doesn't support -sc_threshold. Its 1s rate is
+        # governed by lookahead, so kill it for flat CBR and force IDR.
+        args += [
+            "-rc-lookahead", "0",
+            "-no-scenecut",
+            "-forced-idr",
+        ]
+    else:
+        args += [
+            "-minrate", SPEC.video_bitrate,
+            "-maxrate", SPEC.video_bitrate,
+            # bufsize = 6500k - bitrate: worst-case burst (maxrate+bufsize)
+            # stays 500k under Steam's 7000k ingest cap for headroom.
+            "-bufsize", f"{6500 - int(SPEC.video_bitrate.replace('k', ''))}k",
+        ]
+    args += [
         "-g", str(SPEC.keyframe_interval),
         "-keyint_min", str(SPEC.keyframe_interval),
         "-sc_threshold", "0",
