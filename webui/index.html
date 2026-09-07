@@ -192,7 +192,7 @@ function render(data) {
       <td>${esc(s.name || "?")}</td>
       <td class="st st-${esc(st)}">${st}</td>
       <td>${esc(s.bitrate || "?")}</td>
-      <td class="health">${healthCell(s)}</td>`
+      <td class="health">${healthCell(s)}</td>
       <td>${sfTxt}<span style="color:var(--dim);font-size:11px"> · pos ${fmtOffset(s.resume_offset)} · pid ${esc(s.pid ?? "?")} · ${fmtStarted(s.started_at)}</span></td>
     </tr>`;
   }).join("");
