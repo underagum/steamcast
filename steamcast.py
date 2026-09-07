@@ -590,15 +590,17 @@ def build_ffmpeg_args(
         "-b:v", SPEC.video_bitrate,
     ]
     if enc.codec == "h264_nvenc":
-        # NVENC -rc cbr is loose (runs 15-20% hot on hard frames even with
-        # tight bufsize). -rc vbr + -cq targets quality with -maxrate as a
-        # HARD ceiling; bufsize keeps the 1s window tight. -no-scenecut
-        # needs an explicit value or it eats the next flag.
+        # NVENC true-CBR recipe (NVIDIA forum + ffmpeg trac #7301):
+        # -rc cbr -cbr 1 together, minrate=maxrate=b:v, and a SMALL
+        # bufsize — bufsize is the only real clamp on NVENC's burst
+        # window. 500k at 5000k target ≈ 5% (NVIDIA engineer's 512k/10M).
+        # -no-scenecut needs an explicit value or it eats the next flag.
         args += [
-            "-rc", "vbr",
-            "-cq", "19",
+            "-rc", "cbr",
+            "-cbr", "1",
+            "-minrate", SPEC.video_bitrate,
             "-maxrate", SPEC.video_bitrate,
-            "-bufsize", f"{6500 - int(SPEC.video_bitrate.replace('k', ''))}k",
+            "-bufsize", "500k",
             "-rc-lookahead", "0",
             "-no-scenecut", "1",
         ]
