@@ -586,6 +586,7 @@ def build_ffmpeg_args(
         "-profile:v", SPEC.video_profile,
         "-level:v", SPEC.video_level,
         "-b:v", SPEC.video_bitrate,
+        "-minrate", SPEC.video_bitrate,
         "-maxrate", SPEC.video_bitrate,
         "-bufsize", SPEC.video_bitrate,
         "-g", str(SPEC.keyframe_interval),
