@@ -590,9 +590,9 @@ def build_ffmpeg_args(
         "-b:v", SPEC.video_bitrate,
         "-minrate", SPEC.video_bitrate,
         "-maxrate", SPEC.video_bitrate,
-        # bufsize = 7000k - bitrate: worst-case burst (maxrate+bufsize)
-        # stays at Steam's ingest cap. Never exceeds it.
-        "-bufsize", f"{7000 - int(SPEC.video_bitrate.replace('k', ''))}k",
+        # bufsize = 6500k - bitrate: worst-case burst (maxrate+bufsize)
+        # stays 500k under Steam's 7000k ingest cap for headroom.
+        "-bufsize", f"{6500 - int(SPEC.video_bitrate.replace('k', ''))}k",
         "-g", str(SPEC.keyframe_interval),
         "-keyint_min", str(SPEC.keyframe_interval),
         "-sc_threshold", "0",
