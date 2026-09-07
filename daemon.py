@@ -1016,14 +1016,30 @@ class SteamCastDaemonServer:
                         # truth, not just "process alive".
                         try:
                             from steamcast import _read_log_speed, _read_log_lag, _stream_health
+                            import psutil as _psutil
                         except ImportError:
                             _read_log_speed = _read_log_lag = lambda p: 0.0
                             _stream_health = lambda s, l: ("green", "OK")
+                            _psutil = None
+                        _cpu_cache = {}  # pid → psutil.Process (sampled lazily)
                         stream_payloads = []
                         for gname, s in daemon._active_streams.items():
                             log_path = Path(daemon._ffmpeg_stderr_path(gname))
                             speed = _read_log_speed(log_path)
                             lag_s = _read_log_lag(log_path)
+                            cpu = mem_mb = 0.0
+                            proc = s.get("proc")
+                            if _psutil and proc and proc.poll() is None:
+                                try:
+                                    p = _cpu_cache.get(proc.pid)
+                                    if p is None:
+                                        p = _psutil.Process(proc.pid)
+                                        p.cpu_percent()  # prime
+                                        _cpu_cache[proc.pid] = p
+                                    cpu = p.cpu_percent()
+                                    mem_mb = p.memory_info().rss / 1024 / 1024
+                                except (_psutil.NoSuchProcess, _psutil.AccessDenied):
+                                    _cpu_cache.pop(proc.pid, None)
                             stream_payloads.append({
                                 "name": gname,
                                 "status": s.get("status", "UNKNOWN"),
@@ -1036,6 +1052,8 @@ class SteamCastDaemonServer:
                                 "speed": round(speed, 2),
                                 "lag_s": round(lag_s, 1),
                                 "health": _stream_health(speed, lag_s)[1],
+                                "cpu": round(cpu, 1),
+                                "mem_mb": round(mem_mb, 1),
                             })
                         payload = {
                             "running": True,
