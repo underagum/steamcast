@@ -595,7 +595,7 @@ def build_ffmpeg_args(
         # governed by lookahead, so kill it for flat CBR and force IDR.
         args += [
             "-rc-lookahead", "0",
-            "-no-scenecut",
+            "-no-scenecut", "1",
         ]
     else:
         args += [
