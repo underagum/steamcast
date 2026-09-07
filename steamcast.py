@@ -463,7 +463,7 @@ def detect_encoder(console) -> Optional[EncoderSettings]:
 
     # Priority 1: NVIDIA NVENC
     if "h264_nvenc" in encoders:
-        enc = EncoderSettings(codec="h264_nvenc", preset="p7", cbr_flags=["-rc", "cbr"], is_hardware=True)
+        enc = EncoderSettings(codec="h264_nvenc", preset="p7", cbr_flags=[], is_hardware=True)
         ok, reason, debug_output = _validate_encoder(ffmpeg, enc)
         if ok:
             console.print("[cyan]NVIDIA NVENC detected — using hardware encoding.[/]")
@@ -590,10 +590,13 @@ def build_ffmpeg_args(
         "-b:v", SPEC.video_bitrate,
     ]
     if enc.codec == "h264_nvenc":
-        # NVENC ignores -minrate but DOES honor -maxrate/-bufsize (CPB
-        # proved it). Tight buffer = tight 1s burst. -no-scenecut needs
-        # an explicit value or it eats the next flag.
+        # NVENC -rc cbr is loose (runs 15-20% hot on hard frames even with
+        # tight bufsize). -rc vbr + -cq targets quality with -maxrate as a
+        # HARD ceiling; bufsize keeps the 1s window tight. -no-scenecut
+        # needs an explicit value or it eats the next flag.
         args += [
+            "-rc", "vbr",
+            "-cq", "19",
             "-maxrate", SPEC.video_bitrate,
             "-bufsize", f"{6500 - int(SPEC.video_bitrate.replace('k', ''))}k",
             "-rc-lookahead", "0",
