@@ -234,6 +234,8 @@ def _read_log_lag(log_path: Path) -> float:
         return 0.0
 
     for line in reversed(new_data.splitlines()):
+        if "Resumed reading" in line:
+            continue  # -ss seek artifact, not output lag
         m = re.search(r"lag of ([\d.]+)s", line)
         if m:
             return float(m.group(1))
