@@ -168,7 +168,7 @@ function render(data) {
 
   const tbody = document.querySelector("#streams tbody");
   if (!streams.length) {
-    tbody.innerHTML = `<tr><td colspan="4" style="color:var(--dim)">no active streams</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" style="color:var(--dim)">no active streams</td></tr>`;
     return;
   }
   tbody.innerHTML = streams.map(s => {
