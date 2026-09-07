@@ -590,10 +590,12 @@ def build_ffmpeg_args(
         "-b:v", SPEC.video_bitrate,
     ]
     if enc.codec == "h264_nvenc":
-        # NVENC ignores -minrate/-maxrate/-bufsize in -rc cbr mode (CPB
-        # shows min=0) and doesn't support -sc_threshold. Its 1s rate is
-        # governed by lookahead, so kill it for flat CBR and force IDR.
+        # NVENC ignores -minrate but DOES honor -maxrate/-bufsize (CPB
+        # proved it). Tight buffer = tight 1s burst. -no-scenecut needs
+        # an explicit value or it eats the next flag.
         args += [
+            "-maxrate", SPEC.video_bitrate,
+            "-bufsize", f"{6500 - int(SPEC.video_bitrate.replace('k', ''))}k",
             "-rc-lookahead", "0",
             "-no-scenecut", "1",
         ]
