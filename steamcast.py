@@ -2888,12 +2888,13 @@ def _cmd_daemon():
             print()
             streams = st.get("streams", [])
             if streams:
-                print(f"  {'Game':<25} {'State':<10} {'Bitrate':<10} Storefront")
-                print(f"  {'─'*24} {'─'*9} {'─'*9} {'─'*30}")
+                print(f"  {'Game':<25} {'State':<10} {'Bitrate':<10} {'Health':<12} Storefront")
+                print(f"  {'─'*24} {'─'*9} {'─'*9} {'─'*11} {'─'*30}")
                 for s in streams:
                     name = s.get("name", "?")[:24]
                     sts = s.get("status", "?")
                     bit = s.get("bitrate", "?")
+                    health = s.get("health", "—")[:11]
                     sf = s.get("storefront") or {}
                     if sts == "LIVE":
                         icon = "🟢"
@@ -2917,7 +2918,7 @@ def _cmd_daemon():
                     else:
                         icon = "⚪"
                         sf_txt = str(sf.get("error") or "—")
-                    print(f"  {name:<25} {icon} {sts:<7} {bit:<10} {sf_txt}")
+                    print(f"  {name:<25} {icon} {sts:<7} {bit:<10} {health:<12} {sf_txt}")
                 print()
                 live_count = sum(1 for s in streams if s.get("status") == "LIVE")
                 pushed_count = sum(1 for s in streams if s.get("status") == "PUSHED")

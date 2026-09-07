@@ -1011,23 +1011,37 @@ class SteamCastDaemonServer:
                     # (socket I/O) outside it — a stalled HTTP client would
                     # otherwise block the monitor and storefront threads.
                     with daemon._streams_lock:
+                        # Per-stream pacing health from the ffmpeg log (same
+                        # readers as the TUI) — /status must show viewer-facing
+                        # truth, not just "process alive".
+                        try:
+                            from steamcast import _read_log_speed, _read_log_lag, _stream_health
+                        except ImportError:
+                            _read_log_speed = _read_log_lag = lambda p: 0.0
+                            _stream_health = lambda s, l: ("green", "OK")
+                        stream_payloads = []
+                        for gname, s in daemon._active_streams.items():
+                            log_path = Path(daemon._ffmpeg_stderr_path(gname))
+                            speed = _read_log_speed(log_path)
+                            lag_s = _read_log_lag(log_path)
+                            stream_payloads.append({
+                                "name": gname,
+                                "status": s.get("status", "UNKNOWN"),
+                                "bitrate": s.get("bitrate", ""),
+                                "pid": proc.pid if (proc := s.get("proc")) and proc.poll() is None else None,
+                                "started_at": s.get("started_at", ""),
+                                "appid": s.get("appid", ""),
+                                "resume_offset": round(s.get("resume_offset", 0.0) or 0.0, 1),
+                                "storefront": s.get("storefront"),
+                                "speed": round(speed, 2),
+                                "lag_s": round(lag_s, 1),
+                                "health": _stream_health(speed, lag_s)[1],
+                            })
                         payload = {
                             "running": True,
                             "pid": os.getpid(),
                             "uptime": daemon._uptime_str(),
-                            "streams": [
-                                {
-                                    "name": gname,
-                                    "status": s.get("status", "UNKNOWN"),
-                                    "bitrate": s.get("bitrate", ""),
-                                    "pid": proc.pid if (proc := s.get("proc")) and proc.poll() is None else None,
-                                    "started_at": s.get("started_at", ""),
-                                    "appid": s.get("appid", ""),
-                                    "resume_offset": round(s.get("resume_offset", 0.0) or 0.0, 1),
-                                    "storefront": s.get("storefront"),
-                                }
-                                for gname, s in daemon._active_streams.items()
-                            ],
+                            "streams": stream_payloads,
                         }
                     self._send_json(payload)
                 elif self.path.startswith("/logs"):
