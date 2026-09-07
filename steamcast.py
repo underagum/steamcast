@@ -596,7 +596,6 @@ def build_ffmpeg_args(
         args += [
             "-rc-lookahead", "0",
             "-no-scenecut",
-            "-forced-idr",
         ]
     else:
         args += [
