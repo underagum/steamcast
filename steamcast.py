@@ -106,7 +106,7 @@ VERSION_CHECK_TIMEOUT = 5        # seconds timeout for version check HTTP reques
 
 # ─── Auto-Reconnect ────────────────────────────────────────────────────
 MAX_RECONNECT_RETRIES = 0        # 0 = unlimited (retry forever)
-RECONNECT_COOLDOWN_SEC = 10      # seconds between retry attempts
+RECONNECT_COOLDOWN_SEC = 180     # min seconds between reconnect attempts (3 min — was 10s; hammering kept Steam sessions locked)
 RECONNECT_DELAY_SEC = 2          # delay before spawning the new process
 
 

@@ -206,7 +206,7 @@ class DaemonManager:
 
             # Load config
             games = self.config.get("games", [])
-            restart_every = self.config.get("restart_every_hours", 4)
+            restart_every = self.config.get("restart_every_hours", 1)  # default 1h cycle (was 4h)
 
             if not games:
                 logger.warning("No games configured — daemon starting idle.")
