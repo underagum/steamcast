@@ -1901,11 +1901,11 @@ def show_cast():
 
             # ── Auto-restart interval prompt ──
             if RICH:
-                restart_str = Prompt.ask("[magenta]Auto-restart every N hours? (0=off)[/]", default="4").strip()
+                restart_str = Prompt.ask("[magenta]Auto-restart every N hours? (0=off)[/]", default="1").strip()
             else:
-                restart_str = input("Auto-restart every N hours? (0=off, default 4): ").strip()
+                restart_str = input("Auto-restart every N hours? (0=off, default 1): ").strip()
             try:
-                restart_every = float(restart_str) if restart_str else 4.0
+                restart_every = float(restart_str) if restart_str else 1.0
             except ValueError:
                 restart_every = 0.0
 

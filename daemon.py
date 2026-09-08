@@ -206,7 +206,7 @@ class DaemonManager:
 
             # Load config
             games = self.config.get("games", [])
-            restart_every = self.config.get("restart_every_hours", 1)  # default 1h cycle (was 4h)
+            restart_every = self.config.get("restart_every_hours", 1)  # default 1h cycle (was 4h) — daemon path
 
             if not games:
                 logger.warning("No games configured — daemon starting idle.")
@@ -280,7 +280,7 @@ class DaemonManager:
 
         # Load config: which games to stream, auto-restart interval
         games = self.config.get("games", [])
-        restart_every = self.config.get("restart_every_hours", 4)
+        restart_every = self.config.get("restart_every_hours", 1)
 
         if not games:
             logger.warning("No games configured — daemon starting idle. Add games to SteamCast TUI Setup (option 3).")
@@ -620,7 +620,7 @@ class DaemonManager:
 
         # ── Import steamcast internals ──
         sys.path.insert(0, str(Path(__file__).parent))
-        from steamcast import find_ffmpeg
+        from steamcast import find_ffmpeg, RECONNECT_COOLDOWN_SEC
 
         ffmpeg = find_ffmpeg()
         if not ffmpeg:
@@ -715,6 +715,15 @@ class DaemonManager:
                     proc = stream.get("proc")
                     if proc and proc.poll() is not None:
                         exit_code = proc.returncode
+                        # Reconnect cooldown: don't hammer a dying ingest with a
+                        # fresh session every 5s tick — let Steam GC the rejected
+                        # session before trying again (was: instant respawn).
+                        last_death = stream.get("last_death")
+                        if last_death is not None:
+                            since_death = (datetime.now() - last_death).total_seconds()
+                            if since_death < RECONNECT_COOLDOWN_SEC:
+                                continue  # wait out the cooldown, try next tick
+                        stream["last_death"] = datetime.now()
                         logger.warning("Stream %s died (exit %d). Reconnecting...", gname, exit_code)
                         self._log(f"✗ {gname} died (exit {exit_code}). Reconnecting...")
 
@@ -1015,7 +1024,7 @@ class SteamCastDaemonServer:
                         # readers as the TUI) — /status must show viewer-facing
                         # truth, not just "process alive".
                         try:
-                            from steamcast import _read_log_speed, _read_log_lag, _stream_health
+                            from steamcast import _read_log_speed, _read_log_lag, _stream_health, RECONNECT_COOLDOWN_SEC
                             import psutil as _psutil
                         except ImportError:
                             _read_log_speed = _read_log_lag = lambda p: 0.0
@@ -1160,7 +1169,7 @@ def load_config() -> dict:
     Auto-discovers video files from ~/projects/steamcast/output/<name>.mp4.
     Only active games from the TUI config are included.
     """
-    config: dict = {"games": [], "restart_every_hours": 4}
+    config: dict = {"games": [], "restart_every_hours": 1}
 
     # 1. Load TUI config
     tui_cfg_path = Path.home() / "projects" / "steamcast" / "config.json"
@@ -1177,7 +1186,7 @@ def load_config() -> dict:
     if daemon_cfg_path.exists():
         try:
             dm_cfg = json.loads(daemon_cfg_path.read_text())
-            config["restart_every_hours"] = dm_cfg.get("restart_every_hours", 4)
+            config["restart_every_hours"] = dm_cfg.get("restart_every_hours", 1)
         except (json.JSONDecodeError, OSError):
             pass
 
