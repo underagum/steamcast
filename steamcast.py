@@ -192,10 +192,12 @@ def _read_log_bitrate(log_path: Path) -> str:
 
 
 def _read_log_speed(log_path: Path) -> float:
-    """Read last 8 KB of ffmpeg log to find latest ``speed=`` value.
+    """Recent pace from last two progress lines: (time2-time1)/(elapsed2-elapsed1).
 
-    Returns 1.0 (real-time) if no speed line found — safe default for a
-    freshly-started stream with no speed history yet.
+    ffmpeg's cumulative ``speed=`` is poisoned by the concat seek pre-roll
+    (time starts negative; speed = (elapsed-offset)/elapsed). Delta-delta is
+    immune and still collapses toward 0 on real congestion. Returns 1.0 if
+    fewer than two progress lines exist.
     """
     try:
         with open(log_path, "r", errors="replace") as f:
@@ -209,10 +211,24 @@ def _read_log_speed(log_path: Path) -> float:
     except (OSError, ValueError):
         return 1.0
 
+    times: list[float] = []
+    elapseds: list[float] = []
     for line in reversed(new_data.splitlines()):
-        m = re.search(r"speed=\s*([\d.]+)x", line)
-        if m:
-            return float(m.group(1))
+        if "frame=" not in line:
+            continue
+        m_time = re.search(r"time=(-?)(\d+):(\d+):(\d+\.\d+)", line)
+        m_el = re.search(r"elapsed=(\d+):(\d+):(\d+\.\d+)", line)
+        if not (m_time and m_el):
+            continue
+        sign = -1.0 if m_time.group(1) == "-" else 1.0
+        t = sign * (int(m_time.group(2)) * 3600 + int(m_time.group(3)) * 60 + float(m_time.group(4)))
+        e = int(m_el.group(1)) * 3600 + int(m_el.group(2)) * 60 + float(m_el.group(3))
+        times.append(t)
+        elapseds.append(e)
+        if len(times) == 2:
+            dt = times[0] - times[1]
+            de = elapseds[0] - elapseds[1]
+            return max(0.0, dt / de) if de > 0 else 1.0
     return 1.0
 
 

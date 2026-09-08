@@ -566,7 +566,7 @@ class DaemonManager:
             return []
         args = [ffmpeg, "-re"]
         if resume_offset > 0:
-            args += ["-ss", f"{resume_offset:.3f}"]
+            args += ["-ss", f"{min(resume_offset, 10.0):.3f}"]  # clamp: concat can't seek; >10s pre-roll = unwatchable storefront
         args += [
             "-f", "concat", "-safe", "0",
             "-i", playlist,
