@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.2.0 — 2026-09-09
+
+### Added
+
+- **Per-stream health, CPU & RAM in daemon `/status` and the WebUI dashboard.** The daemon reports pacing health (read speed vs wall-clock, `speed`/`lag_s`) plus per-stream CPU% and RSS for every stream — closing the attach parity gap. The dashboard table gains a color-coded Health column (`OK`/`WARN`/`CRIT`) and per-stream CPU/RAM cells.
+- **WebUI empty-state handling** for the new health column (colspan 4→5).
+
+### Changed
+
+- **Auto-restart cycle default 4h → 1h, unified across ALL paths.** `restart_every_hours` now defaults to 1h in the config loader, the daemon monitor loop, and the CLI prompt/default alike (previously dead-code 4h defaults lingered in several places). The cycle SIGKILLs the ffmpeg child streams only — the daemon process itself is untouched, so stream uptime resets but daemon uptime does not. Set `restart_every_hours` in `config.json` to override.
+- **3-minute reconnect cooldown per stream.** After a stream death, that stream waits a full 3 minutes before respawn (per-stream `last_death` guard) instead of reconnecting instantly — killing the death/respawn churn loop while keeping the auto-reconnect guarantee.
+
+### Fixed
+
+- **PREP: true NVENC CBR.** Native `-rc cbr -cbr 1` flags with a tiny 500k bufsize (replacing the libx264 triplet), `-minrate` added to the rate-control set, `-no-scenecut` given an explicit value (it consumed the next flag), and bufsize = Steam ingest cap − bitrate for 500k headroom. Streams now hold flat ~5.0 Mbps with 1s peaks safely under the 5.4M ingest limit.
+- **PREP audio gate.** Refuses AAC-hole files (missing/corrupt audio track) up front — the root cause of exit-152 deaths.
+- **Loop via concat playlist instead of `-ss` + `-stream_loop`.** The old combo corrupted DTS timestamps at every wrap; looping now uses a concat playlist so wraps stay clean.
+- **Resume offset clamped to 10s + recent-pace speed parser.** The lag reader ignores the `-ss` seek artifact (a false read-speed spike right after start) by measuring recent pace instead.
+- **Previous ffmpeg incarnation's stderr preserved as `_prev.log`** for post-mortem analysis after a respawn.
+- **WebUI script parse break** from a stray backtick in the dashboard.
+- **Clarified parked-tag log** — now states the account is playing another game rather than implying delegated users.
+
 ## v2.1.0 — 2026-08-31
 
 ### Added
