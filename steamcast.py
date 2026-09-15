@@ -41,7 +41,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -2724,7 +2724,24 @@ def _audio_gap_scan(path: Path) -> list:
         if p - prev > 0.5:
             holes.append((prev, p))
         prev = p
+    # tail hole: audio EOF before video EOF — Steam reports "audio behind"
+    # and with -c copy the tail broadcasts video-only → ingest RST (exit 152)
+    vdur = _video_duration(path)
+    if vdur > 0 and vdur - pts[-1] > 0.5:
+        holes.append((pts[-1], vdur))
     return holes
+
+
+def _video_duration(path: Path) -> float:
+    """Container duration in seconds; 0.0 on probe failure."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=120)
+        return float(json.loads(out.stdout)["format"]["duration"])
+    except Exception:
+        return 0.0
 
 
 def _audio_repair(path: Path) -> bool:
