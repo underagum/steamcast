@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.2.1 — 2026-09-15
+
+### Fixed
+
+- **PREP audio gate now catches tail holes — audio EOF before video EOF.** The gate only scanned gaps *between* audio packets, so a file whose audio ends early (e.g. yt-dlp section cut landing at 94s on a 120s clip) passed the gate and shipped. With `-c copy` the tail broadcast video-only → Steam's dashboard reports "audio behind" and the ingest resets the session (exit 152, ~3min cadence). `_audio_gap_scan` now compares last audio PTS against container duration and hands off to the existing `repair_audio.py` silence-pad path.
+
 ## v2.2.0 — 2026-09-09
 
 ### Added
