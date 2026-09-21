@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.3.0 — 2026-09-21
+
+### Added
+
+- **`GET /schedule` endpoint in daemon HTTP API.** Reads `~/.steamcast/schedule.json` (start/end/created) and queries systemd timer units for next-fire times. JSON shape: `{armed, start, end, next_start, next_stop}`. Proxied through nginx as `/steamcast/api/schedule`.
+- **WebUI schedule bar.** Below the daemon header, shows `⏰ stop 2026-09-21 23:59:00 → next fire Mon 23:59:00 WIB` when armed, or `⏰ no schedule` when clean. Fetched alongside status/logs every 5s — no extra polling cost.
+- **`daemon status` TUI prints schedule.** When a schedule is set, the CLI output now shows `⏰ Schedule armed — auto-stop at <end>` (with start time if set).
+
 ## v2.2.1 — 2026-09-15
 
 ### Fixed
