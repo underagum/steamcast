@@ -222,8 +222,6 @@ function renderSchedule(obj) {
   let parts = [];
   if (obj.start) parts.push("start " + obj.start);
   if (obj.end) parts.push("stop " + obj.end);
-  const next = obj.next_stop || obj.next_start;
-  if (next) parts.push("next fire " + next);
   el.textContent = "⏰ " + parts.join(" → ");
 }
 
