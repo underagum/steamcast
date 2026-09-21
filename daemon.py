@@ -996,6 +996,33 @@ class DaemonManager:
             pass
 
 
+SCHED_FILE = os.path.expanduser("~/.steamcast/schedule.json")
+SCHED_START = "steamcast-schedule-start.timer"
+SCHED_STOP = "steamcast-schedule-stop.timer"
+
+
+def _schedule_payload() -> dict:
+    """Read schedule.json + systemd timer next-fire info."""
+    sched = {}
+    try:
+        if os.path.exists(SCHED_FILE):
+            sched = json.loads(open(SCHED_FILE).read())
+    except Exception:
+        pass
+    out = {k: sched.get(k) for k in ("created", "start", "end")}
+    for k, unit in [("next_start", SCHED_START), ("next_stop", SCHED_STOP)]:
+        try:
+            r = subprocess.run(
+                ["systemctl", "show", unit, "-p", "NextElapseUSecRealtime", "--value"],
+                capture_output=True, text=True, timeout=5,
+            )
+            out[k] = r.stdout.strip() or None
+        except Exception:
+            out[k] = None
+    out["armed"] = bool(out.get("start") or out.get("end"))
+    return out
+
+
 # ── HTTP Status Server ──
 
 
@@ -1079,6 +1106,8 @@ class SteamCastDaemonServer:
                         except (ValueError, IndexError):
                             pass
                     self._send_json({"lines": daemon._log_buffer[-n:]})
+                elif self.path.startswith("/schedule"):
+                    self._send_json(_schedule_payload())
                 else:
                     self.send_response(404)
                     self.end_headers()

@@ -41,7 +41,7 @@ except ImportError:
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-VERSION = "2.2.1"
+VERSION = "2.3.0"
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -2984,6 +2984,12 @@ def _cmd_daemon():
                 print(f"  {live_count} LIVE · {pushed_count} PUSHED (of {len(streams)})")
             else:
                 print("  No active streams.")
+            sched = _read_schedule()
+            if sched.get("end"):
+                msg = "auto-stop at " + sched["end"]
+                if sched.get("start"):
+                    msg = "auto-start at " + sched["start"] + " → " + msg
+                print("  ⏰ Schedule armed — " + msg)
         else:
             print("⚪ Daemon is not running.")
             print("   Use: steamcast daemon start")

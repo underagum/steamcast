@@ -96,6 +96,7 @@
   </header>
 
   <div class="summary" id="summary">—</div>
+  <div class="summary" id="schedule">⏰ …</div>
 
   <table id="streams">
     <thead>
@@ -212,16 +213,33 @@ function renderLogs(obj) {
   box.scrollTop = box.scrollHeight;
 }
 
+function renderSchedule(obj) {
+  const el = $("schedule");
+  if (!obj || !obj.armed) {
+    el.textContent = "⏰ no schedule";
+    return;
+  }
+  let parts = [];
+  if (obj.start) parts.push("start " + obj.start);
+  if (obj.end) parts.push("stop " + obj.end);
+  const next = obj.next_stop || obj.next_start;
+  if (next) parts.push("next fire " + next);
+  el.textContent = "⏰ " + parts.join(" → ");
+}
+
 async function poll() {
   try {
-    const [s, l] = await Promise.all([
+    const [s, l, sc] = await Promise.all([
       fetch("/steamcast/api/status", { cache: "no-store" }),
       fetch("/steamcast/api/logs?n=40", { cache: "no-store" }),
+      fetch("/steamcast/api/schedule", { cache: "no-store" }),
     ]);
     const data = s.ok ? await s.json() : null;
     const logs = l.ok ? await l.json() : null;
+    const sched = sc.ok ? await sc.json() : null;
     render(data);
     renderLogs(logs);
+    renderSchedule(sched);
     $("lastPoll").textContent = "last poll " + new Date().toLocaleTimeString("en-GB", { hour12: false });
   } catch (e) {
     render(null);
